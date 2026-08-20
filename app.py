@@ -33,13 +33,11 @@ DISPLAY_VERSION = f"v{APP_VERSION}" if APP_VERSION != 'unknown' else 'unknown'
 
 # ---- 更新检查 ----
 # 远程版本来源：GitHub 仓库根目录的 version 文件（与本地格式一致，纯数字）
-# jsDelivr CDN 作为主源（响应快），GitHub raw 作为备源
-GITHUB_VERSION_URLS = [
-    'https://cdn.jsdelivr.net/gh/wishday/cups-web-print@main/version',
-    'https://raw.githubusercontent.com/wishday/cups-web-print/main/version',
-]
+# GitHub raw 为权威源（无 CDN 缓存，始终最新）；jsDelivr CDN 仅作降级备用
+GITHUB_RAW_VERSION_URL = 'https://raw.githubusercontent.com/wishday/cups-web-print/main/version'
+GITHUB_CDN_VERSION_URL = 'https://cdn.jsdelivr.net/gh/wishday/cups-web-print@main/version'
 UPDATE_CHECK_TIMEOUT = 10  # 单次请求超时（秒）
-UPDATE_CHECK_RETRIES = 3   # 失败最大重试轮数（每轮遍历所有源）
+UPDATE_CHECK_RETRIES = 3   # 失败最大重试轮数（每轮先取权威源，再取 CDN 兜底）
 UPDATE_CHECK_BACKOFF = 1   # 重试间隔（秒）
 
 # 更新检查状态（模块级，线程安全）
@@ -59,27 +57,40 @@ def _parse_version_tuple(version):
     return tuple(int(x) for x in re.findall(r'\d+', str(version)))
 
 
+def _fetch_version_from(url):
+    """请求单个源获取版本号；成功返回纯数字字符串，失败或格式无效返回 None"""
+    try:
+        with urllib.request.urlopen(url, timeout=UPDATE_CHECK_TIMEOUT) as resp:
+            text = resp.read().decode('utf-8').strip()
+        if re.fullmatch(r'\d+(\.\d+)*', text):
+            return text
+        logger.warning(f"远程版本号格式无效：{url} -> {text!r}")
+    except Exception as e:
+        logger.warning(f"获取远程版本失败：{url}：{e}")
+    return None
+
+
 def fetch_remote_version():
     """
-    从远端获取版本号（多源、带超时与重试）
+    从远端获取版本号（权威源优先 + CDN 兜底，带超时与重试）
+
+    优先返回 GitHub raw 的版本号（无缓存、始终最新），避免 CDN 缓存导致
+    推送新版本后最长 12 小时内误报"已是最新版本"。
+    仅当 raw 全部失败时才降级使用 jsDelivr 的值（可能陈旧，但好过检查失败）。
 
     Returns:
         str: 远程版本号（纯数字），全部失败返回 None
     """
+    cdn_fallback = None
     for attempt in range(1, UPDATE_CHECK_RETRIES + 1):
-        for url in GITHUB_VERSION_URLS:
-            try:
-                with urllib.request.urlopen(url, timeout=UPDATE_CHECK_TIMEOUT) as resp:
-                    text = resp.read().decode('utf-8').strip()
-                if re.fullmatch(r'\d+(\.\d+)*', text):
-                    return text
-                logger.warning(f"远程版本号格式无效：{text!r}")
-                return None
-            except Exception as e:
-                logger.warning(f"获取远程版本失败（第 {attempt}/{UPDATE_CHECK_RETRIES} 轮，{url}）：{e}")
+        raw = _fetch_version_from(GITHUB_RAW_VERSION_URL)
+        if raw:
+            return raw
+        if cdn_fallback is None:
+            cdn_fallback = _fetch_version_from(GITHUB_CDN_VERSION_URL)
         if attempt < UPDATE_CHECK_RETRIES:
             time.sleep(UPDATE_CHECK_BACKOFF)
-    return None
+    return cdn_fallback
 
 
 def check_for_updates():
