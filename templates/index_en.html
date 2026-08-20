@@ -438,7 +438,7 @@
 
         // Update check: poll backend /api/update-check and display result
         const UPDATE_POLL_INTERVAL = 2000;
-        const UPDATE_POLL_MAX = 20; // poll for at most ~40 seconds
+        const UPDATE_POLL_MAX = 35; // poll for at most ~70 seconds
         function checkForUpdate() {
             const notice = document.getElementById('updateNotice');
             if (!notice) return;

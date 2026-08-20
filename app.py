@@ -33,9 +33,13 @@ DISPLAY_VERSION = f"v{APP_VERSION}" if APP_VERSION != 'unknown' else 'unknown'
 
 # ---- 更新检查 ----
 # 远程版本来源：GitHub 仓库根目录的 version 文件（与本地格式一致，纯数字）
-GITHUB_VERSION_URL = 'https://raw.githubusercontent.com/wishday/cups-web-print/main/version'
-UPDATE_CHECK_TIMEOUT = 5   # 单次请求超时（秒）
-UPDATE_CHECK_RETRIES = 5   # 失败最大重试次数
+# jsDelivr CDN 作为主源（响应快），GitHub raw 作为备源
+GITHUB_VERSION_URLS = [
+    'https://cdn.jsdelivr.net/gh/wishday/cups-web-print@main/version',
+    'https://raw.githubusercontent.com/wishday/cups-web-print/main/version',
+]
+UPDATE_CHECK_TIMEOUT = 10  # 单次请求超时（秒）
+UPDATE_CHECK_RETRIES = 3   # 失败最大重试轮数（每轮遍历所有源）
 UPDATE_CHECK_BACKOFF = 1   # 重试间隔（秒）
 
 # 更新检查状态（模块级，线程安全）
@@ -57,23 +61,24 @@ def _parse_version_tuple(version):
 
 def fetch_remote_version():
     """
-    从 GitHub 获取远程版本号（带超时与重试）
+    从远端获取版本号（多源、带超时与重试）
 
     Returns:
         str: 远程版本号（纯数字），全部失败返回 None
     """
     for attempt in range(1, UPDATE_CHECK_RETRIES + 1):
-        try:
-            with urllib.request.urlopen(GITHUB_VERSION_URL, timeout=UPDATE_CHECK_TIMEOUT) as resp:
-                text = resp.read().decode('utf-8').strip()
-            if re.fullmatch(r'\d+(\.\d+)*', text):
-                return text
-            logger.warning(f"远程版本号格式无效：{text!r}")
-            return None
-        except Exception as e:
-            logger.warning(f"获取远程版本失败（第 {attempt}/{UPDATE_CHECK_RETRIES} 次）：{e}")
-            if attempt < UPDATE_CHECK_RETRIES:
-                time.sleep(UPDATE_CHECK_BACKOFF)
+        for url in GITHUB_VERSION_URLS:
+            try:
+                with urllib.request.urlopen(url, timeout=UPDATE_CHECK_TIMEOUT) as resp:
+                    text = resp.read().decode('utf-8').strip()
+                if re.fullmatch(r'\d+(\.\d+)*', text):
+                    return text
+                logger.warning(f"远程版本号格式无效：{text!r}")
+                return None
+            except Exception as e:
+                logger.warning(f"获取远程版本失败（第 {attempt}/{UPDATE_CHECK_RETRIES} 轮，{url}）：{e}")
+        if attempt < UPDATE_CHECK_RETRIES:
+            time.sleep(UPDATE_CHECK_BACKOFF)
     return None
 
 

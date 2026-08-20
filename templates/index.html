@@ -438,7 +438,7 @@
 
         // 更新检查：轮询后端 /api/update-check 并显示结果
         const UPDATE_POLL_INTERVAL = 2000;
-        const UPDATE_POLL_MAX = 20; // 最多轮询约 40 秒
+        const UPDATE_POLL_MAX = 35; // 最多轮询约 70 秒
         function checkForUpdate() {
             const notice = document.getElementById('updateNotice');
             if (!notice) return;
