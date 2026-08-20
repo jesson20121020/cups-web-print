@@ -1117,7 +1117,7 @@ def get_job_final_state(printer_name, cups_job_id):
         job_prefix = f"{printer_name}-{cups_job_id} "
         lines = result.stdout.split('\n')
         for i, line in enumerate(lines):
-            if line.startswith(job_prefix):
+            if line.strip().startswith(job_prefix):
                 alerts = ''
                 for detail in lines[i + 1:i + 5]:
                     stripped = detail.strip()
@@ -1191,7 +1191,7 @@ def monitor_job_progress(job_id, cups_job_id, printer_name):
                 # 解析队列中所有 CUPS job ID
                 all_ids = []
                 for line in queue_result.stdout.split('\n'):
-                    m = re.match(rf'{re.escape(printer_name)}-(\d+)\s', line)
+                    m = re.match(rf'{re.escape(printer_name)}-(\d+)\s', line.strip())
                     if m:
                         all_ids.append(int(m.group(1)))
 

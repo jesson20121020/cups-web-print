@@ -292,8 +292,8 @@ def _parse_trays(output):
         纸盒信息列表
     """
     printer_tray_info = _parse_printer_input_tray(output)
-    media_ready_match = re.search(r'media-ready\s*\([^)]+\)\s*=\s*([^\s]+)', output)
-    media_ready = media_ready_match.group(1) if media_ready_match else None
+    media_ready_list = _parse_ipp_attribute(output, 'media-ready')
+    media_ready = ', '.join(media_ready_list) if media_ready_list else None
     
     # 根据状态码映射中文/英文状态
     status_cn_map = {
@@ -311,11 +311,13 @@ def _parse_trays(output):
     
     trays = []
     for i, tray_info in enumerate(printer_tray_info):
-        name = tray_info.get('name', f'纸盒 {i+1}')
-        tray_type = tray_info.get('type', 'unknown')
-        status = tray_info.get('status', 'unknown')
+        # 兼容内联格式（name/type/status）与 collection 格式（tray-name/tray-type/tray-status）
+        name = tray_info.get('name') or tray_info.get('tray-name') or f'纸盒 {i+1}'
+        tray_type = tray_info.get('type') or tray_info.get('tray-type') or 'unknown'
+        status = tray_info.get('status') or tray_info.get('tray-status') or 'unknown'
         status_cn = status_cn_map.get(status, '未知')
         status_en = status_en_map.get(status, status)
+        tray_media = tray_info.get('media') or tray_info.get('media-ready') or media_ready
         
         trays.append({
             'name': name,
@@ -323,7 +325,7 @@ def _parse_trays(output):
             'status': status,
             'status_cn': status_cn,
             'status_en': status_en,
-            'media_ready': media_ready
+            'media_ready': tray_media
         })
     
     logger.debug(f"提取到 {len(trays)} 个纸盒信息")
@@ -398,16 +400,27 @@ def _parse_printer_input_tray(output):
     """
     从 ipptool 输出中解析 printer-input-tray
 
+    支持两种输出格式：
+    - octetString 内联格式（单行，多个纸盒用 ;, 分隔）：
+        printer-input-tray (1setOf octetString) = type=other;...;name=auto;,type=...
+    - collection 多行格式（每个纸盒一个 { ... } 块）：
+        printer-input-tray (1setOf collection) =
+            {
+                tray-name (nameWithoutLanguage) = "Tray 1"
+                tray-type (type2Keyword) = "stationery"
+                tray-status (type2Enum) = 4
+            }
+
     Args:
         output: ipptool 输出文本
 
     Returns:
-        纸盒信息列表
+        纸盒信息列表（键值对字典）
     """
     lines = output.split('\n')
     start_line = None
     for i, line in enumerate(lines):
-        if re.match(r'printer-input-tray\s*\(', line):
+        if re.match(r'printer-input-tray\s*\(', line.strip()):
             start_line = i
             break
 
@@ -415,7 +428,49 @@ def _parse_printer_input_tray(output):
         logger.debug("未找到 printer-input-tray 属性")
         return []
 
-    # 收集从 start_line 开始的所有连续值行（值可能跨多行）
+    first_stripped = lines[start_line].strip()
+    _, _, first_value = first_stripped.partition('= ')
+    is_collection = not first_value.strip()
+
+    if is_collection:
+        # collection 格式：解析连续的 { ... } 块
+        blocks = []
+        current_block = []
+        in_block = False
+        for line in lines[start_line + 1:]:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped == '{':
+                in_block = True
+                current_block = []
+                continue
+            if stripped == '}':
+                if in_block:
+                    blocks.append(current_block)
+                in_block = False
+                continue
+            if not in_block:
+                # 遇到下一个属性，结束解析
+                if re.match(r'[\w][\w-]*\s*\(', stripped):
+                    break
+                continue
+            current_block.append(stripped)
+
+        trays = []
+        for block in blocks:
+            tray_info = {}
+            for line in block:
+                match = re.match(r'([\w-]+)\s*\([^)]+\)\s*=\s*(.*)$', line)
+                if match:
+                    key = match.group(1).strip()
+                    value = match.group(2).strip().strip('"')
+                    tray_info[key] = value
+            if tray_info:
+                trays.append(tray_info)
+        return trays
+
+    # 内联格式：收集值行（值可能跨多行）
     value_parts = []
     in_value = False
     for line in lines[start_line:]:
