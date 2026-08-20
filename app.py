@@ -990,6 +990,49 @@ def submit_print_job(filepath, printer_name, color_mode='mono', duplex='one-side
             }
         return job_id, False
 
+def get_job_final_state(printer_name, cups_job_id):
+    """
+    查询 CUPS 历史队列确认任务的最终状态
+
+    任务离开活动队列并不等于成功完成，可能是被取消或中止。
+    通过 lpstat -l -W all 的 Alerts 字段区分：
+    - job-canceled-by-user: 被取消
+    - job-aborted-by-*: 被中止
+    - 其他（processing-to-stop-point 等）: 正常完成
+    - 两个队列都找不到: CUPS 重启或队列被清空，状态无法确认
+
+    Returns:
+        'completed' / 'cancelled' / 'failed' / 'unknown'
+    """
+    try:
+        result = _lpstat(['-l', '-W', 'all', '-o', printer_name])
+        if result.returncode != 0:
+            return 'unknown'
+
+        job_prefix = f"{printer_name}-{cups_job_id} "
+        lines = result.stdout.split('\n')
+        for i, line in enumerate(lines):
+            if line.startswith(job_prefix):
+                alerts = ''
+                for detail in lines[i + 1:i + 5]:
+                    stripped = detail.strip()
+                    if stripped.startswith('Alerts:'):
+                        alerts = stripped[len('Alerts:'):].strip()
+                        break
+                if not alerts:
+                    return 'completed'
+                alerts_lower = alerts.lower()
+                if 'canceled' in alerts_lower or 'cancelled' in alerts_lower:
+                    return 'cancelled'
+                if 'aborted' in alerts_lower:
+                    return 'failed'
+                return 'completed'
+        return 'unknown'
+    except Exception as e:
+        logger.error(f"查询任务最终状态失败：{e}")
+        return 'unknown'
+
+
 def monitor_job_progress(job_id, cups_job_id, printer_name):
     """
     监控打印任务进度（根据队列位置）
@@ -1074,17 +1117,40 @@ def monitor_job_progress(job_id, cups_job_id, printer_name):
                             print_jobs[job_id]['message'] = f'排队中（前方 {position} 个任务）'
                     logger.debug(f"任务 {job_id} 排队中，前方 {position} 个任务")
             else:
-                # 任务不在队列中：显示 100% 完成
-                if processing_start_time is None:
-                    processing_start_time = start_time
-                total_time = int(time.time() - processing_start_time)
-                with print_jobs_lock:
-                    if job_id in print_jobs:
-                        print_jobs[job_id]['status'] = 'completed'
-                        print_jobs[job_id]['progress'] = 100
-                        print_jobs[job_id]['message'] = f'打印完成 (耗时{total_time}秒)'
-                logger.info(f"任务 {job_id} 已完成")
-                cleanup_temp_file(job_id)
+                # 任务不在活动队列：确认最终状态（可能完成、被取消或被中止）
+                final_state = get_job_final_state(printer_name, cups_job_id)
+                if final_state == 'completed':
+                    if processing_start_time is None:
+                        processing_start_time = start_time
+                    total_time = int(time.time() - processing_start_time)
+                    with print_jobs_lock:
+                        if job_id in print_jobs:
+                            print_jobs[job_id]['status'] = 'completed'
+                            print_jobs[job_id]['progress'] = 100
+                            print_jobs[job_id]['message'] = f'打印完成 (耗时{total_time}秒)'
+                    logger.info(f"任务 {job_id} 已完成")
+                    cleanup_temp_file(job_id)
+                elif final_state == 'cancelled':
+                    with print_jobs_lock:
+                        if job_id in print_jobs:
+                            print_jobs[job_id]['status'] = 'cancelled'
+                            print_jobs[job_id]['progress'] = 0
+                            print_jobs[job_id]['message'] = '打印任务已被取消，请检查打印机'
+                    logger.info(f"任务 {job_id} 已被取消")
+                elif final_state == 'failed':
+                    with print_jobs_lock:
+                        if job_id in print_jobs:
+                            print_jobs[job_id]['status'] = 'failed'
+                            print_jobs[job_id]['progress'] = 0
+                            print_jobs[job_id]['message'] = '打印任务已中止，请检查打印机状态'
+                    logger.warning(f"任务 {job_id} 已中止")
+                else:
+                    with print_jobs_lock:
+                        if job_id in print_jobs:
+                            print_jobs[job_id]['status'] = 'unknown'
+                            print_jobs[job_id]['progress'] = 0
+                            print_jobs[job_id]['message'] = '打印状态无法确认，请查看打印机输出'
+                    logger.warning(f"任务 {job_id} 状态无法确认（可能 CUPS 重启或队列被清空）")
                 break
 
         except Exception as e:

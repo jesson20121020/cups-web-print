@@ -1959,7 +1959,8 @@
                 'completed': 'bg-green-100 text-green-800',
                 'failed': 'bg-red-100 text-red-800',
                 'timeout': 'bg-orange-100 text-orange-800',
-                'cancelled': 'bg-gray-100 text-gray-800'
+                'cancelled': 'bg-gray-100 text-gray-800',
+                'unknown': 'bg-gray-200 text-gray-800'
             };
             return colors[status] || 'bg-gray-100 text-gray-800';
         }
@@ -1979,7 +1980,8 @@
                 'completed': '已完成',
                 'failed': '失败',
                 'timeout': '⏱️ 超时',
-                'cancelled': '已取消'
+                'cancelled': '已取消',
+                'unknown': '状态未知'
             };
             return texts[status] || status;
         }
@@ -1992,8 +1994,8 @@
 
         // 判断任务是否可以删除
         function canDeleteJob(status) {
-            // 已完成、失败和超时的任务可以删除
-            return status === 'completed' || status === 'failed' || status === 'timeout';
+            // 已完成、失败、超时和状态未知的任务可以删除
+            return status === 'completed' || status === 'failed' || status === 'timeout' || status === 'unknown';
         }
 
         // 取消任务
