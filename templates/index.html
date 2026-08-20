@@ -430,6 +430,17 @@
     <script>
         const UPLOAD_LIMIT = {{ max_upload_size }};
         const ALLOWED_EXTENSIONS = {{ allowed_extensions | tojson }};
+
+        // HTML 转义工具函数，防止 XSS（所有外部数据插值必须经过此函数）
+        function escapeHtml(value) {
+            if (value === null || value === undefined) return '';
+            return String(value)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
         let uploadedFile = null;
         let currentUploadXhr = null;
         let jobs = [];
@@ -457,7 +468,7 @@
                     clearInterval(pollTimer);
                     if (data.status === 'update-available' && data.latest_version) {
                         const latest = 'v' + data.latest_version;
-                        notice.innerHTML = '<a href="https://github.com/wishday/cups-web-print/releases" target="_blank" rel="noopener" style="color:#16a34a;font-size:13px;text-decoration:none;">发现新版本 ' + latest + '</a>';
+                        notice.innerHTML = '<a href="https://github.com/wishday/cups-web-print/releases" target="_blank" rel="noopener" style="color:#16a34a;font-size:13px;text-decoration:none;">发现新版本 ' + escapeHtml(latest) + '</a>';
                     } else if (data.status === 'up-to-date') {
                         notice.innerHTML = '<span style="color:#9ca3af;font-size:13px;">已是最新版本</span>';
                     } else if (data.status === 'error') {
@@ -986,7 +997,7 @@
 
                 currentPreviewImages.forEach((img) => {
                     const imgUrl = `/api/preview/${encodeURIComponent(img.filename)}`;
-                    imagesHtml += `<img src="${imgUrl}" class="max-w-full shadow-lg page-image" data-page="${img.page}" alt="第${img.page}页" loading="lazy">`;
+                    imagesHtml += `<img src="${imgUrl}" class="max-w-full shadow-lg page-image" data-page="${escapeHtml(img.page)}" alt="第${escapeHtml(img.page)}页" loading="lazy">`;
                 });
 
                 imagesHtml += '</div>';
@@ -1138,11 +1149,11 @@
                 <div class="space-y-2">
                     <div class="flex justify-between">
                         <span class="text-gray-600">文件名:</span>
-                        <span class="font-medium text-gray-800">${job.filename}</span>
+                        <span class="font-medium text-gray-800">${escapeHtml(job.filename)}</span>
                     </div>
                     <div class="flex justify-between">
                         <span class="text-gray-600">打印机:</span>
-                        <span class="text-gray-800">${job.printer}</span>
+                        <span class="text-gray-800">${escapeHtml(job.printer)}</span>
                     </div>
                     <div class="flex justify-between">
                         <span class="text-gray-600">色彩模式:</span>
@@ -1179,23 +1190,23 @@
                     ${job.page_range ? `
                     <div class="flex justify-between">
                         <span class="text-gray-600">页面范围:</span>
-                        <span class="text-gray-800">${job.page_range}</span>
+                        <span class="text-gray-800">${escapeHtml(job.page_range)}</span>
                     </div>
                     ` : ''}
                     <div class="flex justify-between">
                         <span class="text-gray-600">任务状态:</span>
-                        <span class="px-2 py-1 rounded-full text-xs ${getStatusColor(job.status)}">${getStatusText(job.status)}</span>
+                        <span class="px-2 py-1 rounded-full text-xs ${getStatusColor(job.status)}">${escapeHtml(getStatusText(job.status))}</span>
                     </div>
                     ${job.cups_job_id ? `
                     <div class="flex justify-between">
                         <span class="text-gray-600">CUPS任务ID:</span>
-                        <span class="text-gray-800 font-mono text-xs">${job.cups_job_id}</span>
+                        <span class="text-gray-800 font-mono text-xs">${escapeHtml(job.cups_job_id)}</span>
                     </div>
                     ` : ''}
                     ${job.message ? `
                     <div class="mt-2 pt-2 border-t border-blue-200">
                         <span class="text-gray-600">消息:</span>
-                        <p class="text-gray-800 mt-1 text-sm">${job.message}</p>
+                        <p class="text-gray-800 mt-1 text-sm">${escapeHtml(job.message)}</p>
                     </div>
                     ` : ''}
                 </div>
@@ -1327,10 +1338,10 @@
                         ${queue.map(job => `
                             <div class="bg-white border rounded-lg p-2 text-xs">
                                 <div class="flex justify-between items-center">
-                                    <span class="font-medium">任务 #${job.job_id}</span>
+                                    <span class="font-medium">任务 #${escapeHtml(job.job_id)}</span>
                                     <span class="text-gray-500">${formatFileSize(parseInt(job.size))}</span>
                                 </div>
-                                <div class="text-gray-600 truncate">${job.filename}</div>
+                                <div class="text-gray-600 truncate">${escapeHtml(job.filename)}</div>
                             </div>
                         `).join('')}
                     </div>
@@ -1350,7 +1361,7 @@
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
                         </svg>
                         <span class="font-medium">状态：</span>
-                        <span class="${statusColors[status] || 'text-gray-600'}">${statusText[status] || status}</span>
+                        <span class="${statusColors[status] || 'text-gray-600'}">${escapeHtml(statusText[status] || status)}</span>
                     </div>
                     <div class="text-xs text-gray-500">
                         ${queue.length} 个任务
@@ -1417,13 +1428,13 @@
                     const traysHtml = trays.map(tray => {
                         let name = tray.name || tray.tray_name || '未知';
                         let type = tray.type || tray.paper_type || '未知';
-                        let status = tray.status_cn || tray.status || '未知';
+                        let status = tray.status_cn || tray.status_en || tray.status || '未知';
                         let mediaReady = tray.media_ready || tray.paper_size || '未知';
                         let statusClass = 'text-gray-500';
 
-                        if (status === '可用' || status === '已装载' || status === '正常' || status === 'OK') {
+                        if (status === '可用' || status === 'Available' || status === '已装载' || status === 'Loaded' || status === '正常' || status === 'Normal' || status === 'OK') {
                             statusClass = 'text-green-600';
-                        } else if (status === '空' || status === 'Empty') {
+                        } else if (status === '空' || status === 'Empty' || status === '移除' || status === 'Removed') {
                             statusClass = 'text-red-600';
                         } else if (status === '警告' || status === 'Warning') {
                             statusClass = 'text-yellow-600';
@@ -1447,21 +1458,21 @@
                                         <svg class="w-5 h-5 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>
                                         </svg>
-                                        <span class="font-medium break-words">${name}</span>
+                                        <span class="font-medium break-words">${escapeHtml(name)}</span>
                                     </div>
                                     <div class="flex items-center gap-1">
                                         ${statusIcon}
-                                        <span class="text-xs ${statusClass}">${status}</span>
+                                        <span class="text-xs ${statusClass}">${escapeHtml(status)}</span>
                                     </div>
                                 </div>
                                 <div class="grid grid-cols-2 gap-2 text-xs">
                                     <div>
                                         <div class="text-gray-500">纸盒类型</div>
-                                        <div class="font-medium break-words">${type}</div>
+                                        <div class="font-medium break-words">${escapeHtml(type)}</div>
                                     </div>
                                     <div>
                                         <div class="text-gray-500">纸张大小</div>
-                                        <div class="font-medium break-words">${mediaReady}</div>
+                                        <div class="font-medium break-words">${escapeHtml(mediaReady)}</div>
                                     </div>
                                 </div>
                             </div>
@@ -1483,29 +1494,7 @@
                         let colorName = cartridge.name || '未知';
                         let level = cartridge.level;
                         let status;
-                        const isWasteInk = cartridge.type === 'waste-ink' || (cartridge.name && cartridge.name.includes('废墨'));
-
-                        if (cartridge.color && cartridge.color.startsWith('#')) {
-                            colorHex = cartridge.color;
-                            if (level === null) {
-                                status = '未知';
-                            } else if (isWasteInk) {
-                                status = level >= 80 ? '警告' : '正常';
-                            } else {
-                                status = level > 20 ? '正常' : (level > 0 ? '警告' : '空');
-                            }
-                        } else {
-                            switch(cartridge.color) {
-                                case 'black': colorHex = '#1f2937'; break;
-                                case 'cyan': colorHex = '#06b6d4'; break;
-                                case 'magenta': colorHex = '#ec4899'; break;
-                                case 'yellow': colorHex = '#eab308'; break;
-                                case 'color': colorHex = 'linear-gradient(90deg, #06b6d4, #ec4899, #eab308)'; break;
-                                default: colorHex = '#6b7280';
-                            }
-                            colorName = cartridge.color_name || cartridge.color || '未知';
-                            status = cartridge.status || '正常';
-                        }
+                        const isWasteInk = cartridge.type === 'waste-ink' || (cartridge.name && ['废墨', 'Waste'].some(k => cartridge.name.includes(k)));
 
                         // 处理 IPP 特殊状态值 (-1, -2, -3)
                         let levelText = '';
@@ -1535,6 +1524,29 @@
                             levelText = `${level}%`;
                         }
 
+                        if (cartridge.color && cartridge.color.startsWith('#')) {
+                            // 只允许合法的十六进制颜色，防止属性注入
+                            colorHex = /^#[0-9a-fA-F]{3,8}$/.test(cartridge.color) ? cartridge.color : '#6b7280';
+                            if (level === null) {
+                                status = '未知';
+                            } else if (isWasteInk) {
+                                status = level >= 80 ? '警告' : '正常';
+                            } else {
+                                status = level > 20 ? '正常' : (level > 0 ? '警告' : '空');
+                            }
+                        } else {
+                            switch(cartridge.color) {
+                                case 'black': colorHex = '#1f2937'; break;
+                                case 'cyan': colorHex = '#06b6d4'; break;
+                                case 'magenta': colorHex = '#ec4899'; break;
+                                case 'yellow': colorHex = '#eab308'; break;
+                                case 'color': colorHex = 'linear-gradient(90deg, #06b6d4, #ec4899, #eab308)'; break;
+                                default: colorHex = '#6b7280';
+                            }
+                            colorName = cartridge.color_name || cartridge.color || '未知';
+                            status = cartridge.status || '正常';
+                        }
+
                         let progressColor = 'bg-green-500';
                         if (showProgress) {
                             if (isWasteInk) {
@@ -1553,7 +1565,7 @@
                         if (!showProgress) {
                             statusIcon = '<svg class="w-3 h-3 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>';
                             statusClass = 'text-gray-500';
-                        } else if (status === '正常' || status === 'OK') {
+                        } else if (status === '正常' || status === 'Normal' || status === 'OK') {
                             statusIcon = '<svg class="w-3 h-3 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>';
                             statusClass = 'text-green-600';
                         } else if (status === '警告' || status === 'Warning') {
@@ -1572,23 +1584,23 @@
                                 <div class="flex items-center justify-between mb-2">
                                     <div class="flex items-center gap-2">
                                         <div class="w-4 h-4 rounded" style="background: ${colorHex.startsWith('linear') ? colorHex : colorHex}"></div>
-                                        <span class="font-medium">${colorName}</span>
+                                        <span class="font-medium">${escapeHtml(colorName)}</span>
                                     </div>
                                     <div class="flex items-center gap-1">
                                         ${statusIcon}
-                                        <span class="text-xs ${statusClass}">${status}</span>
+                                        <span class="text-xs ${statusClass}">${escapeHtml(status)}</span>
                                     </div>
                                 </div>
                                 ${showProgress ? `
                                 <div class="flex items-center gap-2">
-                                    <span class="text-xs text-gray-600 w-8">${level}%</span>
+                                    <span class="text-xs text-gray-600 w-8">${Math.min(100, Math.max(0, Number(level) || 0))}%</span>
                                     <div class="flex-1 bg-gray-200 rounded-full h-2">
-                                        <div class="${progressColor} h-2 rounded-full transition-all" style="width: ${level}%"></div>
+                                        <div class="${progressColor} h-2 rounded-full transition-all" style="width: ${Math.min(100, Math.max(0, Number(level) || 0))}%"></div>
                                     </div>
                                 </div>
                                 ` : `
                                 <div class="flex items-center justify-center">
-                                    <span class="text-xs text-gray-500">${levelText}</span>
+                                    <span class="text-xs text-gray-500">${escapeHtml(levelText)}</span>
                                 </div>
                                 `}
                             </div>
@@ -1699,7 +1711,7 @@
                                         </div>
                                         <div class="flex items-center gap-1">
                                             ${statusIcon}
-                                            <span class="text-xs ${statusClass}">${stateText}</span>
+                                            <span class="text-xs ${statusClass}">${escapeHtml(stateText)}</span>
                                         </div>
                                     </div>
                                     ${ippStatus.printer_state_reasons && ippStatus.printer_state_reasons.length > 0 && ippStatus.printer_state_reasons[0] !== 'none' ? `
@@ -1707,7 +1719,7 @@
                                         <div class="text-xs text-gray-500 mb-1">错误信息</div>
                                         <div class="flex flex-wrap gap-1">
                                             ${translatedReasons.map(reason => `
-                                                <span class="text-xs text-red-600 bg-red-50 px-2 py-1 rounded">${reason}</span>
+                                                <span class="text-xs text-red-600 bg-red-50 px-2 py-1 rounded">${escapeHtml(reason)}</span>
                                             `).join('')}
                                         </div>
                                     </div>
@@ -1715,7 +1727,7 @@
                                     ${ippStatus.printer_alert_description && ippStatus.printer_alert_description !== 'Non-alert' ? `
                                     <div class="border-t border-gray-200 pt-2 mt-2">
                                         <div class="text-xs text-gray-500">详细信息</div>
-                                        <div class="text-xs text-gray-700 mt-1">${ippStatus.printer_alert_description}</div>
+                                        <div class="text-xs text-gray-700 mt-1">${escapeHtml(ippStatus.printer_alert_description)}</div>
                                     </div>
                                     ` : ''}
                                 </div>
@@ -1744,7 +1756,7 @@
                                         </div>
                                         <div class="flex items-center gap-1">
                                             ${statusIcon}
-                                            <span class="text-xs ${statusClass}">${stateText}</span>
+                                            <span class="text-xs ${statusClass}">${escapeHtml(stateText)}</span>
                                         </div>
                                     </div>
                                 </div>
@@ -1771,7 +1783,7 @@
                                     <svg class="w-5 h-5 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/>
                                     </svg>
-                                    <span class="font-medium">${printerName}</span>
+                                    <span class="font-medium">${escapeHtml(printerName)}</span>
                                 </div>
                             </div>
                             <div class="grid grid-cols-2 gap-2 text-xs">
@@ -1781,7 +1793,7 @@
                                 </div>
                                 <div>
                                     <div class="text-gray-500">固件版本</div>
-                                    <div class="font-medium">${firmwareVersion}</div>
+                                    <div class="font-medium">${escapeHtml(firmwareVersion)}</div>
                                 </div>
                             </div>
                         </div>
@@ -1791,7 +1803,7 @@
                         <div class="space-y-2">
                             ${printerBasicInfoHtml}
                             ${ippStatusHtml}
-                            ${printer.source ? `<div class="text-xs text-gray-500 mt-2 pt-2 border-t border-gray-200 text-center">${printer.source}</div>` : ''}
+                            ${printer.source ? `<div class="text-xs text-gray-500 mt-2 pt-2 border-t border-gray-200 text-center">${escapeHtml(printer.source)}</div>` : ''}
                         </div>
                     `;
                 } else {
@@ -1822,7 +1834,7 @@
                 container.innerHTML = data.files.map(file => `
                     <div class="flex gap-3 p-3 bg-gray-50 rounded">
                         <div class="flex-1 min-w-0">
-                            <p class="text-sm font-medium text-gray-800 break-all">${file.filename}</p>
+                            <p class="text-sm font-medium text-gray-800 break-all">${escapeHtml(file.filename)}</p>
                             <p class="text-xs text-gray-500 mt-1">${formatFileSize(file.size)}</p>
                         </div>
                         <div class="flex flex-col gap-1 flex-shrink-0">
@@ -1917,11 +1929,11 @@
                     <div class="border rounded-lg p-3 hover:shadow-md transition-shadow">
                         <div class="flex gap-3 mb-2">
                             <div class="flex-1 min-w-0 cursor-pointer" onclick="toggleJobDetails('${job.id}')">
-                                <p class="font-medium text-sm text-gray-800 break-all">${job.filename}</p>
-                                <p class="text-xs text-gray-500 mt-1">${job.printer} | ${job.copies}份</p>
+                                <p class="font-medium text-sm text-gray-800 break-all">${escapeHtml(job.filename)}</p>
+                                <p class="text-xs text-gray-500 mt-1">${escapeHtml(job.printer)} | ${job.copies}份</p>
                             </div>
                             <div class="flex flex-col gap-1 flex-shrink-0">
-                                <span class="text-xs px-2 py-1 rounded-full ${getStatusColor(job.status)} text-center whitespace-nowrap">${getStatusText(job.status)}</span>
+                                <span class="text-xs px-2 py-1 rounded-full ${getStatusColor(job.status)} text-center whitespace-nowrap">${escapeHtml(getStatusText(job.status))}</span>
                                 ${canCancelJob(job.status) ? `
                                 <button onclick="cancelJob('${job.id}', event)"
                                         class="text-xs bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded transition whitespace-nowrap"
@@ -1956,23 +1968,23 @@
                             <div class="grid grid-cols-2 gap-2 text-xs">
                                 <div class="flex">
                                     <span class="text-gray-500 w-20">色彩模式:</span>
-                                    <span class="text-gray-800">${getColorModeText(job.color_mode)}</span>
+<span class="text-gray-800">${escapeHtml(getColorModeText(job.color_mode))}</span>
                                 </div>
                                 <div class="flex">
                                     <span class="text-gray-500 w-20">双面打印:</span>
-                                    <span class="text-gray-800">${getDuplexText(job.duplex)}</span>
+<span class="text-gray-800">${escapeHtml(getDuplexText(job.duplex))}</span>
                                 </div>
                                 <div class="flex">
                                     <span class="text-gray-500 w-20">打印方向:</span>
-                                    <span class="text-gray-800">${getOrientationText(job.orientation)}</span>
+<span class="text-gray-800">${escapeHtml(getOrientationText(job.orientation))}</span>
                                 </div>
                                 <div class="flex">
                                     <span class="text-gray-500 w-20">纸张大小:</span>
-                                    <span class="text-gray-800">${getPaperSizeText(job.paper_size)}</span>
+<span class="text-gray-800">${escapeHtml(getPaperSizeText(job.paper_size))}</span>
                                 </div>
                                 <div class="flex">
                                     <span class="text-gray-500 w-20">纸张材质:</span>
-                                    <span class="text-gray-800">${getPaperTypeText(job.paper_type)}</span>
+<span class="text-gray-800">${escapeHtml(getPaperTypeText(job.paper_type))}</span>
                                 </div>
                                 <div class="flex">
                                     <span class="text-gray-500 w-20">打印份数:</span>
@@ -1984,22 +1996,22 @@
                                 </div>
                                 <div class="flex">
                                     <span class="text-gray-500 w-20">打印缩放:</span>
-                                    <span class="text-gray-800">${getPrintScalingText(job.print_scaling)}</span>
+<span class="text-gray-800">${escapeHtml(getPrintScalingText(job.print_scaling))}</span>
                                 </div>
                                 ${job.page_range ? `
                                 <div class="flex">
                                     <span class="text-gray-500 w-20">页面范围:</span>
-                                    <span class="text-gray-800">${job.page_range}</span>
+                                    <span class="text-gray-800">${escapeHtml(job.page_range)}</span>
                                 </div>
                                 ` : ''}
                             </div>
                             <div class="mt-2 text-xs text-gray-400">
                                 任务ID: ${job.id.substring(0, 8)}...
-                                ${job.cups_job_id ? ` | CUPS任务ID: ${job.cups_job_id}` : ''}
+                                ${job.cups_job_id ? ` | CUPS任务ID: ${escapeHtml(job.cups_job_id)}` : ''}
                             </div>
                             ${job.message ? `
                             <div class="mt-2 p-2 bg-gray-50 rounded text-xs text-gray-600">
-                                <span class="font-medium">消息:</span> ${job.message}
+                                <span class="font-medium">消息:</span> ${escapeHtml(job.message)}
                             </div>
                             ` : ''}
                         </div>

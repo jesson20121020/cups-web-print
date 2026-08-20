@@ -1904,6 +1904,16 @@ def api_print():
     if not filepath or not printer_name:
         return jsonify({'error': '缺少必要参数'}), 400
 
+    # 校验打印机必须存在于 CUPS 打印机列表（防止提交到不存在的队列/注入）
+    try:
+        available_printers = {p['name'] for p in get_printers_fast()}
+        if available_printers and printer_name not in available_printers:
+            logger.warning(f"打印请求使用了不存在的打印机：{printer_name}")
+            return jsonify({'error': f'打印机不存在：{printer_name}'}), 400
+    except Exception as e:
+        # 获取打印机列表失败时放行（fail-open），避免偶发子进程错误影响正常打印
+        logger.warning(f"校验打印机列表失败，跳过校验：{e}")
+
     if not os.path.exists(filepath):
         return jsonify({'error': '文件不存在'}), 404
     
