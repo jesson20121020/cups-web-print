@@ -301,22 +301,22 @@ def safe_filename(filename, allowed_extensions):
         allowed_extensions: 允许的扩展名集合
 
     Returns:
-        str: 安全的文件名
+        str: 安全的文件名；若文件名无效或扩展名不被允许则返回 None
     """
     # 1. 移除路径部分，只保留文件名
     filename = os.path.basename(filename)
 
-    # 2. 移除空字符串
+    # 2. 空文件名直接拒绝
     if not filename:
-        return 'file'
+        return None
 
     # 3. 提取并验证扩展名
     name_part, ext = os.path.splitext(filename)
     ext = ext.lower()
 
-    # 如果无扩展名或扩展名不在允许列表中
+    # 如果无扩展名或扩展名不在允许列表中，直接拒绝
     if not ext or ext.lstrip('.') not in allowed_extensions:
-        return 'file'
+        return None
 
     # 4. 清理文件名中的非法字符（保留中文、英文、数字、下划线、连字符、空格、括号等）
     # 移除路径分隔符和控制字符
@@ -328,9 +328,9 @@ def safe_filename(filename, allowed_extensions):
     # 移除 '..' 防止路径遍历
     safe_name = safe_name.replace('..', '')
 
-    # 5. 如果文件名为空，使用默认名
+    # 5. 如果文件名为空，直接拒绝
     if not safe_name.strip():
-        safe_name = 'file'
+        return None
 
     # 6. 限制文件名长度（避免文件系统限制）
     if len(safe_name) > 200:
@@ -1326,6 +1326,8 @@ def api_upload():
             # 获取文件名和扩展名（使用自定义 safe_filename 保留中文等非ASCII字符）
             original_filename = file.filename
             filename = safe_filename(original_filename, app.config['ALLOWED_EXTENSIONS'])
+            if not filename:
+                return jsonify({'error': '不支持的文件类型'}), 400
 
             # 添加时间戳避免文件名冲突
             name, ext = os.path.splitext(filename)

@@ -134,7 +134,8 @@ def get_all_printer_info_with_status(printer_url):
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=15  # 15 秒超时
+                timeout=15,  # 15 秒超时
+                env={**os.environ, 'LC_ALL': 'C'}  # 强制英文输出，避免 locale 影响解析
             )
             
             if result.returncode != 0:
@@ -379,19 +380,19 @@ def _parse_ipp_attribute(output, attribute_name):
     Returns:
         属性值列表
     """
-    pattern = rf'{attribute_name}\s*\([^)]+\)\s*=\s*(.+)'
-    match = re.search(pattern, output)
+    pattern = rf'^{re.escape(attribute_name)}\s*\([^)]+\)\s*=\s*(.*)$'
+    for line in output.split('\n'):
+        line = line.strip()
+        if line.startswith(attribute_name + ' '):
+            match = re.match(pattern, line)
+            if match:
+                values_str = match.group(1)
+                # 分割值（按逗号），过滤空值
+                values = [v.strip() for v in values_str.split(',') if v.strip()]
+                return values
 
-    if not match:
-        logger.debug(f"未找到属性: {attribute_name}")
-        return []
-
-    values_str = match.group(1)
-
-    # 分割值（按逗号）
-    values = [v.strip() for v in values_str.split(',')]
-
-    return values
+    logger.debug(f"未找到属性: {attribute_name}")
+    return []
 
 def _parse_printer_input_tray(output):
     """
