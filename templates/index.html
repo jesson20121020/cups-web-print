@@ -65,14 +65,37 @@
             transform: scale(1.02);
             cursor: pointer;
         }
-        
+
+        /* 顶栏：窄屏时随布局流动，宽屏时固定左上/右上角 */
+        .top-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 4px;
+        }
+        @media (min-width: 1024px) {
+            .top-bar {
+                position: absolute;
+                top: 16px;
+                left: 16px;
+                right: 16px;
+                z-index: 9999;
+                padding: 0;
+            }
+        }
     </style>
 </head>
 <body class="bg-gray-50 min-h-screen">
-    <!-- Language Switcher -->
-    <div style="position:fixed;top:16px;right:16px;z-index:9999;">
-        <a href="/zh" style="padding:6px 12px;margin-right:4px;background:#3b82f6;color:white;border-radius:4px;text-decoration:none;font-size:14px;">中文</a>
-        <a href="/en" style="padding:6px 12px;background:#e5e7eb;color:#374151;border-radius:4px;text-decoration:none;font-size:14px;">English</a>
+    <!-- 顶栏：版本号 + 语言切换 -->
+    <div class="top-bar">
+        <div>
+            <div style="color:#9ca3af;font-size:14px;"><a href="https://github.com/wishday/cups-web-print" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;">{{ display_version }}</a></div>
+            <div id="updateNotice"></div>
+        </div>
+        <div>
+            <a href="/zh" style="padding:6px 12px;margin-right:4px;background:#3b82f6;color:white;border-radius:4px;text-decoration:none;font-size:14px;">中文</a>
+            <a href="/en" style="padding:6px 12px;background:#e5e7eb;color:#374151;border-radius:4px;text-decoration:none;font-size:14px;">English</a>
+        </div>
     </div>
 
     <div class="container mx-auto px-4 py-8 max-w-6xl">
@@ -413,6 +436,41 @@
         let jobsTimerId = null;
         let filesTimerId = null;
 
+        // 更新检查：轮询后端 /api/update-check 并显示结果
+        const UPDATE_POLL_INTERVAL = 2000;
+        const UPDATE_POLL_MAX = 20; // 最多轮询约 40 秒
+        function checkForUpdate() {
+            const notice = document.getElementById('updateNotice');
+            if (!notice) return;
+            let pollCount = 0;
+            const pollTimer = setInterval(async () => {
+                pollCount++;
+                try {
+                    const resp = await fetch('/api/update-check');
+                    const data = await resp.json();
+                    if (data.status === 'checking') {
+                        if (pollCount >= UPDATE_POLL_MAX) {
+                            clearInterval(pollTimer);
+                        }
+                        return;
+                    }
+                    clearInterval(pollTimer);
+                    if (data.status === 'update-available' && data.latest_version) {
+                        const latest = 'v' + data.latest_version;
+                        notice.innerHTML = '<a href="https://github.com/wishday/cups-web-print/releases" target="_blank" rel="noopener" style="color:#16a34a;font-size:13px;text-decoration:none;">发现新版本 ' + latest + '</a>';
+                    } else if (data.status === 'up-to-date') {
+                        notice.innerHTML = '<span style="color:#9ca3af;font-size:13px;">已是最新版本</span>';
+                    } else if (data.status === 'error') {
+                        notice.innerHTML = '<span style="color:#9ca3af;font-size:13px;">检查更新失败</span>';
+                    }
+                } catch (e) {
+                    if (pollCount >= UPDATE_POLL_MAX) {
+                        clearInterval(pollTimer);
+                    }
+                }
+            }, UPDATE_POLL_INTERVAL);
+        }
+
         // 页面范围验证函数
         function validatePageRange(value) {
             const errorSpan = document.getElementById('pageRangeError');
@@ -468,6 +526,7 @@
 
 
         document.addEventListener('DOMContentLoaded', () => {
+            checkForUpdate();
             // 获取DOM元素
             const uploadPreviewContainer = document.getElementById('uploadPreviewContainer');
             const uploadState = document.getElementById('uploadState');

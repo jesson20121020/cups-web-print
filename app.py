@@ -7,6 +7,7 @@ Web 打印服务 - 基于 Python Flask + CUPS
 
 from flask import Flask, render_template, request, jsonify, send_from_directory
 import os
+import urllib.request
 import subprocess
 import json
 import uuid
@@ -17,6 +18,94 @@ import logging
 import re
 import shutil
 import glob
+
+# 应用版本号：从根目录 version 文件读取（纯数字，如 1.8），显示时加 v 前缀
+def _read_version():
+    version_file = os.path.join(os.path.dirname(__file__), 'version')
+    try:
+        with open(version_file, 'r', encoding='utf-8') as f:
+            return f.read().strip()
+    except OSError:
+        return 'unknown'
+
+APP_VERSION = _read_version()
+DISPLAY_VERSION = f"v{APP_VERSION}" if APP_VERSION != 'unknown' else 'unknown'
+
+# ---- 更新检查 ----
+# 远程版本来源：GitHub 仓库根目录的 version 文件（与本地格式一致，纯数字）
+GITHUB_VERSION_URL = 'https://raw.githubusercontent.com/wishday/cups-web-print/main/version'
+UPDATE_CHECK_TIMEOUT = 5   # 单次请求超时（秒）
+UPDATE_CHECK_RETRIES = 5   # 失败最大重试次数
+UPDATE_CHECK_BACKOFF = 1   # 重试间隔（秒）
+
+# 更新检查状态（模块级，线程安全）
+update_check = {
+    'status': 'idle',          # idle / checking / up-to-date / update-available / error
+    'latest': None,            # 远程最新版本（纯数字）
+    'checked_at': None,        # 检查完成时间
+    'error': None,             # 失败原因
+}
+update_check_lock = threading.Lock()
+
+
+def _parse_version_tuple(version):
+    """将版本号解析为整数元组用于比较，如 '1.10' -> (1, 10)"""
+    if not version:
+        return ()
+    return tuple(int(x) for x in re.findall(r'\d+', str(version)))
+
+
+def fetch_remote_version():
+    """
+    从 GitHub 获取远程版本号（带超时与重试）
+
+    Returns:
+        str: 远程版本号（纯数字），全部失败返回 None
+    """
+    for attempt in range(1, UPDATE_CHECK_RETRIES + 1):
+        try:
+            with urllib.request.urlopen(GITHUB_VERSION_URL, timeout=UPDATE_CHECK_TIMEOUT) as resp:
+                text = resp.read().decode('utf-8').strip()
+            if re.fullmatch(r'\d+(\.\d+)*', text):
+                return text
+            logger.warning(f"远程版本号格式无效：{text!r}")
+            return None
+        except Exception as e:
+            logger.warning(f"获取远程版本失败（第 {attempt}/{UPDATE_CHECK_RETRIES} 次）：{e}")
+            if attempt < UPDATE_CHECK_RETRIES:
+                time.sleep(UPDATE_CHECK_BACKOFF)
+    return None
+
+
+def check_for_updates():
+    """后台任务：抓取远程版本并与本地版本对比，更新 update_check 状态"""
+    remote = fetch_remote_version()
+    now = datetime.now().isoformat()
+    with update_check_lock:
+        if remote is None:
+            update_check.update({
+                'status': 'error',
+                'latest': None,
+                'checked_at': now,
+                'error': '无法连接 GitHub'
+            })
+            return
+        update_check.update({'latest': remote, 'checked_at': now, 'error': None})
+        if _parse_version_tuple(remote) > _parse_version_tuple(APP_VERSION):
+            update_check['status'] = 'update-available'
+        else:
+            update_check['status'] = 'up-to-date'
+
+
+def trigger_update_check():
+    """每次页面打开时调用；若已有检查在进行则复用，否则启动后台检查"""
+    with update_check_lock:
+        if update_check['status'] == 'checking':
+            return
+        update_check['status'] = 'checking'
+        update_check['error'] = None
+    thread = threading.Thread(target=check_for_updates, daemon=True)
+    thread.start()
 
 # 导入 img2pdf（图片转 PDF 无损转换，非必需——有 LibreOffice 作为 fallback）
 try:
@@ -1240,16 +1329,33 @@ def get_printer_queue(printer_name):
 @app.route('/zh')
 def index():
     """中文主页（默认）"""
+    trigger_update_check()
     return render_template('index.html',
+        display_version=DISPLAY_VERSION,
         max_upload_size=app.config['MAX_CONTENT_LENGTH'],
         allowed_extensions=sorted(app.config['ALLOWED_EXTENSIONS']))
 
 @app.route('/en')
 def index_en():
     """English Home Page"""
+    trigger_update_check()
     return render_template('index_en.html',
+        display_version=DISPLAY_VERSION,
         max_upload_size=app.config['MAX_CONTENT_LENGTH'],
         allowed_extensions=sorted(app.config['ALLOWED_EXTENSIONS']))
+
+
+@app.route('/api/update-check', methods=['GET'])
+def api_update_check():
+    """获取更新检查结果（供前端轮询）"""
+    with update_check_lock:
+        return jsonify({
+            'status': update_check['status'],
+            'local_version': APP_VERSION,
+            'latest_version': update_check['latest'],
+            'error': update_check['error'],
+            'checked_at': update_check['checked_at'],
+        })
 
 @app.route('/api/printers', methods=['GET'])
 def api_printers():
