@@ -89,7 +89,7 @@
     <!-- 顶栏：版本号 + 语言切换 -->
     <div class="top-bar">
         <div>
-            <div style="color:#9ca3af;font-size:14px;"><a href="https://github.com/wishday/cups-web-print" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;">{{ display_version }}</a></div>
+            <div style="color:#9ca3af;font-size:14px;"><a href="https://github.com/wishday/cups-web-print" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;">{{ display_version }}</a><span id="versionTag" style="margin-left:6px;font-size:13px;color:#9ca3af;"></span></div>
             <div id="updateNotice"></div>
         </div>
         <div>
@@ -467,12 +467,15 @@
                     }
                     clearInterval(pollTimer);
                     if (data.status === 'update-available' && data.latest_version) {
+                        document.getElementById('versionTag').textContent = '';
                         const latest = 'v' + data.latest_version;
                         notice.innerHTML = '<a href="https://github.com/wishday/cups-web-print/releases" target="_blank" rel="noopener" style="color:#16a34a;font-size:13px;text-decoration:none;">发现新版本 ' + escapeHtml(latest) + '</a>';
                     } else if (data.status === 'up-to-date') {
-                        notice.innerHTML = '<span style="color:#9ca3af;font-size:13px;">已是最新版本</span>';
+                        notice.innerHTML = '';
+                        document.getElementById('versionTag').textContent = '(已最新)';
                     } else if (data.status === 'error') {
-                        notice.innerHTML = '<span style="color:#9ca3af;font-size:13px;">检查更新失败</span>';
+                        document.getElementById('versionTag').textContent = '';
+                        notice.innerHTML = '';
                     }
                 } catch (e) {
                     if (pollCount >= UPDATE_POLL_MAX) {
