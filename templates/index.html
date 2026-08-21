@@ -866,6 +866,14 @@
         let currentPreviewImages = [];
         let previewCheckInterval = null;
 
+        // 停止预览轮询定时器（PDF 加载成功 / 失败切图片 / 页面切换时调用）
+        function stopPreviewCheck() {
+            if (previewCheckInterval) {
+                clearInterval(previewCheckInterval);
+                previewCheckInterval = null;
+            }
+        }
+
         async function loadPreview(filename, previewImages = null) {
             const previewContent = document.getElementById('previewContent');
             if (!previewContent) return;
@@ -948,20 +956,25 @@
                     pdfObject.addEventListener('load', () => {
                         pdfLoaded = true;
                         loadingIndicator.classList.add('hidden');
+                        stopPreviewCheck();
                         console.log('PDF 加载成功');
                     });
 
                     // 方案 3: 尺寸检测（兜底）
-                    if (previewCheckInterval) clearInterval(previewCheckInterval);
+                    stopPreviewCheck();
+                    let previewCheckTicks = 0;
                     previewCheckInterval = setInterval(() => {
                         try {
+                            if (++previewCheckTicks > 24) {
+                                stopPreviewCheck();
+                                return;
+                            }
                             const width = pdfObject.clientWidth;
                             const height = pdfObject.clientHeight;
 
                             if (width > 0 && height > 0 && width > 50 && height > 50) {
                                 pdfLoaded = true;
-                                clearInterval(previewCheckInterval);
-                                previewCheckInterval = null;
+                                stopPreviewCheck();
                                 loadingIndicator.classList.add('hidden');
                                 console.log('PDF 加载成功（尺寸检测）');
                             }
@@ -986,6 +999,7 @@
 
         // 降级为图片预览（当 PDF 加载失败或用户手动跳过时）
         function loadFallbackImages() {
+            stopPreviewCheck();
             const previewContent = document.getElementById('previewContent');
             if (!previewContent) return;
 
@@ -2069,7 +2083,7 @@
         // 判断任务是否可以删除
         function canDeleteJob(status) {
             // 已完成、失败、超时和状态未知的任务可以删除
-            return status === 'completed' || status === 'failed' || status === 'timeout' || status === 'unknown';
+            return status === 'completed' || status === 'failed' || status === 'timeout' || status === 'unknown' || status === 'error';
         }
 
         // 取消任务

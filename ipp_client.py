@@ -328,6 +328,19 @@ def _parse_trays(output):
             'media_ready': tray_media
         })
     
+    # IPP Everywhere / 现代驱动常不暴露 printer-input-tray，导致纸盒列表为空。
+    # 此时用 media-ready 合成纸盒条目（每个就绪介质视为一个可用纸盒）。
+    if not trays and media_ready_list:
+        for media in media_ready_list:
+            trays.append({
+                'name': media,
+                'type': 'auto',
+                'status': '5',
+                'status_cn': '可用',
+                'status_en': 'Available',
+                'media_ready': media
+            })
+    
     logger.debug(f"提取到 {len(trays)} 个纸盒信息")
     return trays
 
