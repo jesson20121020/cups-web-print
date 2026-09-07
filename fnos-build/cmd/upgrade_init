@@ -1,0 +1,23 @@
+#!/bin/bash
+# upgrade_init — 升级前（fnOS 会先停掉应用，然后调用此脚本）
+set -uo pipefail
+
+APP_NAME="${TRIM_APPNAME:-cups-web-print}"
+APP_DIR="${TRIM_APPDEST:-/var/apps/${APP_NAME}}"
+DATA_DIR="${TRIM_PKGVAR:-${APP_DIR}/var}"
+LOG="${DATA_DIR}/install.log"
+
+mkdir -p "${DATA_DIR}" 2>/dev/null || true
+exec >> "${LOG}" 2>&1
+
+echo "=========================================="
+echo "[$(date '+%F %T')] upgrade_init start (${TRIM_OLD_APPVER:-?} -> ${TRIM_APPVER:-?})"
+
+# 备份 uploads（如有）
+if [ -d "${DATA_DIR}/uploads" ] && [ "$(ls -A "${DATA_DIR}/uploads" 2>/dev/null)" ]; then
+    echo "[$(date '+%F %T')] 备份 uploads -> uploads.bak.${TRIM_OLD_APPVER:-prev}.tar.gz"
+    tar -czf "${DATA_DIR}/uploads.bak.${TRIM_OLD_APPVER:-prev}.tar.gz" -C "${DATA_DIR}" uploads 2>/dev/null || true
+fi
+
+echo "[$(date '+%F %T')] upgrade_init done"
+exit 0

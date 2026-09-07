@@ -1,0 +1,81 @@
+#!/bin/bash
+# install_init — 应用文件落地前执行（特权上下文，fnpack 标准钩子）
+# 职责（全部需要 root 权限）：
+#   1. 检查 CUPS 是否已装，未装则补装
+#   2. 检查中文字体
+#   3. 若安装向导 wizard_install_libreoffice=true 且 libreoffice 不在 PATH，
+#      则 apt-get install libreoffice（meta-package，含 writer/impress/calc/draw/math/base）
+# 失败不阻断安装（LibreOffice 是可选依赖；CUPS 是硬依赖）。
+set -uo pipefail
+
+APP_NAME="${TRIM_APPNAME:-cups-web-print}"
+
+echo "[$(date '+%F %T')] install_init start"
+
+# PATH 必须含 /usr/bin（fnpack 调度脚本时不导出 PATH）
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# ---------- 1. CUPS 自启动 ----------
+if command -v lpstat >/dev/null 2>&1; then
+    echo "[$(date '+%F %T')] CUPS 已安装: $(lpstat -r 2>&1 | head -1)"
+else
+    echo "[$(date '+%F %T')] WARN: CUPS 未检测到，尝试 apt-get install cups"
+    if command -v apt-get >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cups 2>&1 | tail -5 || \
+            echo "[$(date '+%F %T')] ERROR: cups 安装失败，请手动 apt-get install cups"
+    fi
+fi
+if command -v systemctl >/dev/null 2>&1 && command -v lpstat >/dev/null 2>&1; then
+    systemctl enable cups 2>/dev/null || true
+    systemctl start cups 2>/dev/null || echo "[$(date '+%F %T')] WARN: systemctl start cups 失败"
+fi
+
+# ---------- 2. 中文字体（CUPS 打印 PDF 需要；fnOS 通常已装）----------
+if command -v fc-list >/dev/null 2>&1; then
+    CJK_COUNT=$(fc-list :lang=zh 2>/dev/null | wc -l)
+    echo "[$(date '+%F %T')] 中文字体数量: ${CJK_COUNT}"
+fi
+
+# ---------- 3. LibreOffice 安装（依据向导 wizard_install_libreoffice）----------
+# 向导字段名来自 fnos-build/wizard/install：wizard_install_libreoffice (true/false)
+# 安装成功后写一个 sentinel 文件到 ${TRIM_PKGVAR}/.libreoffice_installed 供后续排查。
+DATA_DIR="${TRIM_PKGVAR:-/vol1/@appdata/${APP_NAME}}"
+mkdir -p "${DATA_DIR}" 2>/dev/null || true
+SENTINEL="${DATA_DIR}/.libreoffice_installed"
+
+WANT_LO="${wizard_install_libreoffice:-false}"
+echo "[$(date '+%F %T')] 向导 wizard_install_libreoffice = ${WANT_LO}"
+
+if [ "${WANT_LO}" != "true" ]; then
+    echo "[$(date '+%F %T')] 未勾选安装 LibreOffice，跳过（Office 文档预览不可用）"
+    echo "skipped:user_unselected" > "${SENTINEL}" 2>/dev/null || true
+else
+    if command -v libreoffice >/dev/null 2>&1; then
+        LO_VER="$(libreoffice --version 2>&1 | head -1)"
+        echo "[$(date '+%F %T')] LibreOffice 已安装: ${LO_VER}"
+        echo "ok:${LO_VER}" > "${SENTINEL}" 2>/dev/null || true
+    elif ! command -v apt-get >/dev/null 2>&1; then
+        echo "[$(date '+%F %T')] WARN: 系统无 apt-get，无法自动安装 LibreOffice"
+        echo "failed:no_apt" > "${SENTINEL}" 2>/dev/null || true
+    else
+        echo "[$(date '+%F %T')] 开始 apt-get install libreoffice（首次约 5-10 分钟）..."
+        # 先 update 一次，避免因索引陈旧找不到包
+        apt-get update 2>&1 | tail -3 || echo "[$(date '+%F %T')] WARN: apt-get update 非零退出，继续尝试 install"
+        if DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libreoffice 2>&1 | tail -10; then
+            if command -v libreoffice >/dev/null 2>&1; then
+                LO_VER="$(libreoffice --version 2>&1 | head -1)"
+                echo "[$(date '+%F %T')] LibreOffice 安装成功: ${LO_VER}"
+                echo "ok:${LO_VER}" > "${SENTINEL}" 2>/dev/null || true
+            else
+                echo "[$(date '+%F %T')] WARN: apt-get 报告成功但 libreoffice 命令仍不在 PATH"
+                echo "failed:not_in_path" > "${SENTINEL}" 2>/dev/null || true
+            fi
+        else
+            echo "[$(date '+%F %T')] WARN: apt-get install libreoffice 失败。Office 文档预览不可用，请手动执行：DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libreoffice"
+            echo "failed:apt_error" > "${SENTINEL}" 2>/dev/null || true
+        fi
+    fi
+fi
+
+echo "[$(date '+%F %T')] install_init done"
+exit 0

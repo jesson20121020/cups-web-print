@@ -1,0 +1,17 @@
+[
+  {
+    "stepTitle": "Web 打印服务",
+    "items": [
+      {
+        "type": "switch",
+        "field": "wizard_install_libreoffice",
+        "label": "安装 LibreOffice（用于 DOCX/PPTX/XLSX 预览，约 800MB，首次安装会更慢）",
+        "initValue": "false"
+      },
+      {
+        "type": "tips",
+        "helpText": "首次启动将自动安装 Python 依赖到应用数据目录（约 50MB）。CUPS 通常已预装，未安装时会自动补装。\n\n应用将通过飞牛统一网关（NAS 域名 /app/cups-web-print）访问，不需要独立端口。"
+      }
+    ]
+  }
+]

@@ -1,0 +1,14 @@
+#!/bin/bash
+# config_init — 配置变更前
+# 停掉应用以便重新应用配置
+set -uo pipefail
+
+APP_NAME="${TRIM_APPNAME:-cups-web-print}"
+APP_DIR="${TRIM_APPDEST:-/var/apps/${APP_NAME}}"
+
+MAIN="${APP_DIR}/cmd/main"
+if [ -x "${MAIN}" ]; then
+    "${MAIN}" stop 2>/dev/null || true
+fi
+
+exit 0

@@ -1,0 +1,197 @@
+#!/bin/bash
+# cups-web-print 业务钩子：定义 SERVICE_COMMAND 与各阶段 service_xxx 函数
+# 该文件被 common 引用，会覆盖 common 里的同名默认占位。
+
+# --- 关键路径 ---
+APP_DIR="${TRIM_APPDEST}"
+APP_DATA_DIR="${TRIM_PKGVAR}"
+# 实测 fnOS 把 app.tgz 内容直接落到 ${TRIM_APPDEST}/ 根（不是 target/server/）
+APP_SERVER_DIR="${APP_DIR}/server"
+VENV_DIR="${APP_DATA_DIR}/venv"
+VENV_PY="${VENV_DIR}/bin/python3"
+REQUIREMENTS="${APP_SERVER_DIR}/requirements.txt"
+
+# --- 启动命令 ---
+# 使用 venv 内的 python（首次启动时 install_python_deps 会创建 venv）。
+# SERVICE_COMMAND 由 cmd/main 中的 build_service_command 按实际路径构造，
+# 此处保留默认占位，便于 service-setup 被单独 source 时不报错。
+APP_PORT="${SERVICE_PORT:-${wizard_port:-5000}}"
+SERVICE_COMMAND="${VENV_PY} -u ${APP_SERVER_DIR}/app.py"
+
+# --- 包用户身份（供某些 root-only 安装脚本用，运行时不需要） ---
+APP_USER="${TRIM_USERNAME:-cups-web-print}"
+APP_GROUP="${TRIM_GROUPNAME:-cups-web-print}"
+
+# --- Python 依赖安装 ---
+install_python_deps()
+{
+    local py="${VENV_PY}"
+    if [ ! -d "${VENV_DIR}" ]; then
+        install_log "创建 Python venv: ${VENV_DIR}"
+        python3 -m venv "${VENV_DIR}" 2>&1 | install_log
+        py="${VENV_PY}"
+    fi
+    if [ ! -f "${REQUIREMENTS}" ]; then
+        error_exit "未找到依赖文件: ${REQUIREMENTS}"
+    fi
+    install_log "安装 Python 依赖（首次启动约需 1-3 分钟）..."
+    "${py}" -m pip install --quiet --upgrade pip 2>&1 | install_log
+    "${py}" -m pip install --quiet -r "${REQUIREMENTS}" 2>&1 | install_log
+    if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+        error_exit "Python 依赖安装失败，请查看 ${LOG_FILE}"
+    fi
+    install_log "Python 依赖安装完成"
+}
+
+# --- apt-get 包装（仅 install_init 调用，root 上下文）---
+apt_install_if_missing()
+{
+    local pkg="$1"
+    if dpkg -l "${pkg}" 2>/dev/null | grep -q "^ii"; then
+        return 0
+    fi
+    if ! command -v apt-get >/dev/null 2>&1; then
+        install_log "WARN: 未检测到 apt-get，跳过 ${pkg} 安装"
+        return 1
+    fi
+    install_log "安装 ${pkg} ..."
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${pkg}" 2>&1 | install_log
+}
+
+# --- CUPS 自启动（仅 install_init 调用）---
+ensure_cups_running()
+{
+    if ! command -v lpstat >/dev/null 2>&1; then
+        install_log "WARN: 未检测到 CUPS（lpstat），尝试安装..."
+        apt_install_if_missing cups || apt_install_if_missing cups-daemon || {
+            error_exit "CUPS 未安装且自动安装失败，请手动 apt-get install cups 后重试"
+        }
+        apt_install_if_missing cups-client || true
+    fi
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl enable cups 2>/dev/null || true
+        systemctl start cups 2>/dev/null || install_log "WARN: 启动 CUPS 失败，请检查 systemctl"
+    fi
+    install_log "CUPS 状态: $(lpstat -r 2>&1 | head -1)"
+}
+
+# --- LibreOffice 安装（仅 install_init / upgrade_init 调用，root 上下文）---
+# 依据安装向导 wizard_install_libreoffice：
+#   - true  且 libreoffice 不在 PATH：apt 安装 meta-package（含 writer/impress/calc/draw/math/base）
+#   - false：不安装，DOCX/PPTX/XLSX 预览不可用，但 PDF/图片/打印均不受影响
+# 失败不阻断安装（LibreOffice 是可选依赖）。结果记录到 ${APP_DATA_DIR}/.libreoffice_installed，
+# 供 uninstall_callback 排查使用。
+ensure_libreoffice()
+{
+    local state_file="${APP_DATA_DIR}/.libreoffice_installed"
+    local want="${wizard_install_libreoffice:-false}"
+
+    if [ "${want}" != "true" ]; then
+        install_log "向导未勾选 LibreOffice，跳过安装（Office 文档预览不可用）"
+        echo "skipped" > "${state_file}" 2>/dev/null || true
+        return 0
+    fi
+
+    if command -v libreoffice >/dev/null 2>&1; then
+        install_log "LibreOffice 已安装: $(libreoffice --version 2>&1 | head -1)"
+        echo "ok:$(libreoffice --version 2>&1 | head -1)" > "${state_file}" 2>/dev/null || true
+        return 0
+    fi
+
+    install_log "向导要求安装 LibreOffice，开始 apt-get install ..."
+    if apt_install_if_missing libreoffice; then
+        # 二次确认
+        if command -v libreoffice >/dev/null 2>&1; then
+            install_log "LibreOffice 安装成功: $(libreoffice --version 2>&1 | head -1)"
+            echo "ok:$(libreoffice --version 2>&1 | head -1)" > "${state_file}" 2>/dev/null || true
+        else
+            install_log "WARN: apt-get 报告成功，但 libreoffice 命令仍不在 PATH"
+            echo "failed:not_in_path" > "${state_file}" 2>/dev/null || true
+        fi
+    else
+        install_log "WARN: LibreOffice 安装失败（apt-get 非零退出）。Office 文档预览不可用，可在 NAS 终端手动执行：DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libreoffice"
+        echo "failed:apt_error" > "${state_file}" 2>/dev/null || true
+    fi
+}
+
+# --- 安装/升级数据目录 ---
+ensure_data_dirs()
+{
+    mkdir -p "${APP_DATA_DIR}/uploads" "${APP_DATA_DIR}/previews"
+}
+
+# ============================================================
+# fnOS 生命周期钩子（被 common 内的 install_init 等阶段调用）
+# ============================================================
+
+service_preinst()
+{
+    ensure_cups_running
+    ensure_libreoffice
+}
+
+service_postinst()
+{
+    ensure_data_dirs
+    # 首次启动 install Python 依赖（在特权阶段也允许）
+    install_python_deps
+    install_log "cups-web-print 安装完成"
+}
+
+service_preuninst()
+{
+    # 兜底：清理可能的子进程
+    pkill -f "app.py" 2>/dev/null || true
+}
+
+service_postuninst()
+{
+    install_log "cups-web-print 已卸载"
+}
+
+service_preupgrade()
+{
+    # 备份 uploads/previews（如用户希望保留）
+    if [ -d "${APP_DATA_DIR}/uploads" ]; then
+        install_log "备份 uploads -> uploads.bak.${TRIM_OLD_APPVER:-prev}.tar.gz"
+        ${TAR} -czf "${APP_DATA_DIR}/uploads.bak.${TRIM_OLD_APPVER:-prev}.tar.gz" -C "${APP_DATA_DIR}" uploads 2>/dev/null || true
+    fi
+}
+
+service_postupgrade()
+{
+    ensure_data_dirs
+    install_python_deps
+    # 升级也尊重向导的 LibreOffice 选择（首次安装未勾选、后来重装时勾选的情况）
+    ensure_libreoffice
+    install_log "cups-web-print 升级完成"
+}
+
+service_postconfig()
+{
+    # 配置变更后无需特殊操作（端口变更由 service_setup 重启时自然应用）
+    install_log "配置已应用"
+}
+
+service_prestart()
+{
+    # 每次启动前确认 venv 就绪
+    if [ ! -x "${VENV_PY}" ] || ! "${VENV_PY}" -c "import flask, werkzeug, img2pdf" 2>/dev/null; then
+        install_log "Python 依赖缺失，补装..."
+        install_python_deps
+    fi
+    ensure_data_dirs
+    # 仅检测 LibreOffice 状态，不在此阶段 apt install（避免每次启动都触发 apt）
+    if [ "${wizard_install_libreoffice:-false}" = "true" ]; then
+        if command -v libreoffice >/dev/null 2>&1; then
+            install_log "LibreOffice 可用: $(libreoffice --version 2>&1 | head -1)"
+        else
+            install_log "WARN: 向导要求 LibreOffice 但未安装。请重新运行安装向导或手动：apt-get install -y --no-install-recommends libreoffice"
+        fi
+    fi
+}
+
+service_poststop()
+{
+    install_log "cups-web-print 已停止"
+}

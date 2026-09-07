@@ -1,0 +1,159 @@
+#!/bin/bash
+# cups-web-print 生命周期主入口（start/stop/status）
+# 架构：service_port 模式（参考 techysy/deepseek-harness-fnos）
+# Flask 监听 0.0.0.0:5000，fnOS 桌面通过 trim_http_cgi 把
+# /app/cups-web-print/fngateway/* 自动反代到 localhost:5000/*（fnOS 自动剥 fngateway 前缀）
+# 浏览器内 fetch /api/printers 在 NAS:5000 同源下直达 Flask 200，不依赖 base 标签
+set -uo pipefail
+
+APP_NAME="${TRIM_APPNAME:-cups-web-print}"
+APP_DIR="${TRIM_APPDEST:-/var/apps/${APP_NAME}}"
+
+# 数据目录：优先 TRIM_PKGVAR（fnOS 注入）；兜底推导 fnOS home 软链
+DATA_DIR=""
+if [ -n "${TRIM_PKGVAR:-}" ]; then
+    DATA_DIR="${TRIM_PKGVAR}"
+else
+    if [ -L "${APP_DIR}/home" ]; then
+        APP_HOME="$(readlink -f "${APP_DIR}/home")"
+        APP_VOL="$(printf '%s' "${APP_HOME}" | sed -n 's#^\(/vol[^/]*\)/.*#\1#p')"
+    fi
+    if [ -z "${APP_VOL:-}" ]; then
+        APP_VOL="$(printf '%s' "${APP_DIR}" | sed -n 's#^\(/vol[^/]*\)/.*#\1#p')"
+    fi
+    if [ -n "${APP_VOL:-}" ]; then
+        DATA_DIR="${APP_VOL}/@appdata/${APP_NAME}"
+    else
+        DATA_DIR="${APP_DIR}/var"
+    fi
+fi
+export DATA_DIR
+
+# 监听端口（service_port 模式）
+APP_PORT="${TRIM_SERVICE_PORT:-5000}"
+
+# Python venv
+VENV_PY="${DATA_DIR}/venv/bin/python3"
+
+# 应用代码：实测 fnOS 把 app.tgz 内容直接落到 ${TRIM_APPDEST}/ 根（不是 target/server）
+SERVER_DIR=""
+for cand in "${APP_DIR}/server" "${APP_DIR}/target/server"; do
+    if [ -f "${cand}/app.py" ]; then
+        SERVER_DIR="${cand}"
+        break
+    fi
+done
+if [ -z "${SERVER_DIR}" ]; then
+    echo "[$(date '+%F %T')] ERROR: 未找到应用代码（尝试 ${APP_DIR}/server 与 ${APP_DIR}/target/server）" >&2
+    echo "未找到应用代码" > "${TRIM_TEMP_LOGFILE:-/dev/null}"
+    exit 1
+fi
+
+# PATH 必须含 /usr/bin（fnOS 调度脚本不导出 PATH）
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PYTHONUNBUFFERED=1
+
+LOG_FILE="${DATA_DIR}/app.log"
+FLASK_PID_FILE="${DATA_DIR}/app.pid"
+
+log() { echo "[$(date '+%F %T')] $*" >> "${LOG_FILE}"; }
+
+is_running() {
+    local pid_file="$1"
+    if [ -f "${pid_file}" ]; then
+        local pid
+        pid=$(cat "${pid_file}" 2>/dev/null)
+        [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null
+    else
+        return 1
+    fi
+}
+
+start() {
+    if [ ! -x "${VENV_PY}" ]; then
+        log "WARN: venv 未创建 (${VENV_PY})；请确认 install_callback 已运行"
+        echo "Python venv 未安装，请重新安装应用或手动执行：${VENV_PY}" > "${TRIM_TEMP_LOGFILE:-/dev/null}"
+        return 1
+    fi
+
+    mkdir -p "${DATA_DIR}/uploads" "${DATA_DIR}/previews"
+
+    if ! is_running "${FLASK_PID_FILE}"; then
+        log "启动 Flask (0.0.0.0:${APP_PORT})..."
+        cd "${SERVER_DIR}"
+        nohup "${VENV_PY}" -u app.py >> "${LOG_FILE}" 2>&1 &
+        local flask_pid=$!
+        echo "${flask_pid}" > "${FLASK_PID_FILE}"
+        disown 2>/dev/null || true
+
+        local i=0
+        while [ "${i}" -lt 30 ]; do
+            if kill -0 "${flask_pid}" 2>/dev/null && (echo > /dev/tcp/127.0.0.1/${APP_PORT}) 2>/dev/null; then
+                log "Flask 已就绪 (pid ${flask_pid}, 监听 0.0.0.0:${APP_PORT})"
+                break
+            fi
+            if ! kill -0 "${flask_pid}" 2>/dev/null; then
+                log "ERROR: Flask 启动后立即退出，请查看 ${LOG_FILE}"
+                echo "Flask 启动失败，请查看日志：${LOG_FILE}" > "${TRIM_TEMP_LOGFILE:-/dev/null}"
+                return 1
+            fi
+            sleep 1
+            i=$((i + 1))
+        done
+
+        if ! kill -0 "${flask_pid}" 2>/dev/null; then
+            log "ERROR: Flask 启动超时"
+            return 1
+        fi
+    else
+        log "Flask 已在运行 (pid $(cat "${FLASK_PID_FILE}"))"
+    fi
+
+    log "cups-web-print 已启动；访问路径：NAS:5000 (fnOS 桌面通过 /app/cups-web-print/fngateway/ 嵌入)"
+    return 0
+}
+
+stop() {
+    if is_running "${FLASK_PID_FILE}"; then
+        local pid
+        pid=$(cat "${FLASK_PID_FILE}")
+        log "Stopping Flask (pid ${pid})"
+        kill "${pid}" 2>/dev/null || true
+        local i=0
+        while kill -0 "${pid}" 2>/dev/null && [ "${i}" -lt 10 ]; do
+            sleep 1
+            i=$((i + 1))
+        done
+        if kill -0 "${pid}" 2>/dev/null; then
+            log "WARN: Flask 优雅退出超时，强制 kill -9"
+            kill -9 "${pid}" 2>/dev/null || true
+        fi
+        rm -f "${FLASK_PID_FILE}"
+    fi
+
+    pkill -f "${SERVER_DIR}/app.py" 2>/dev/null || true
+    pkill -f "${SERVER_DIR}/gateway.py" 2>/dev/null || true
+    log "cups-web-print 已停止"
+    return 0
+}
+
+status() {
+    local rc=3
+    if is_running "${FLASK_PID_FILE}"; then
+        echo "cups-web-print: 运行中 (Flask pid $(cat "${FLASK_PID_FILE}"), 端口 ${APP_PORT})"
+        rc=0
+    else
+        echo "cups-web-print: 未运行"
+        rc=3
+    fi
+    return "${rc}"
+    exit 3
+}
+
+case "${1:-}" in
+    start)  start ;;
+    stop)   stop ;;
+    status) status; exit $? ;;
+    restart) stop; sleep 1; start ;;
+    *) echo "用法: $0 {start|stop|status|restart}"; exit 1 ;;
+esac

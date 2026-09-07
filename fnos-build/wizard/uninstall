@@ -1,0 +1,27 @@
+[
+  {
+    "stepTitle": "卸载 Web 打印服务",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "卸载后是否删除应用数据目录？包含上传文件、预览缓存、CUPS 用户偏好、Python venv 等。"
+      },
+      {
+        "type": "radio",
+        "field": "wizard_delete_data",
+        "label": "仅卸载应用，保留所有数据以便将来重新安装。",
+        "initValue": "false",
+        "options": [
+          {
+            "label": "保留现有文件",
+            "value": "false"
+          },
+          {
+            "label": "清除所有套件数据文件（不可恢复）！！！",
+            "value": "true"
+          }
+        ]
+      }
+    ]
+  }
+]

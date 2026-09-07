@@ -1,0 +1,45 @@
+version: "3.8"
+
+# cups-web-print Docker Compose 配置
+#
+# 启动方式（在 cups-web-print 目录下）：
+#   docker compose up -d
+#   docker compose logs -f
+#   docker compose down
+#
+# 设计要点：
+#   - 使用 host 网络模式，让容器能访问 host 上的 ipp-usb 端点（60001）和 CUPS socket
+#   - 挂载 host 的 CUPS 配置目录，共享打印机队列定义
+#   - 挂载 /dev/bus/usb 让容器能直接驱动 USB 打印机（如果走 cnijbe2 fallback）
+#   - 挂载 host 上的 Python/前端源码到容器，修改代码后重启容器即生效，无需重建镜像
+#   - uploads/ 和 previews/ 持久化到 host，方便备份和调试
+
+services:
+  cups-web-print:
+    image: ghcr.io/wishday/cups-web-print:latest
+    container_name: cups-web-print
+    restart: unless-stopped
+    network_mode: host
+    devices:
+      - /dev/bus/usb
+    volumes:
+      # 共享 host 的 CUPS 配置（队列、PPD、证书）
+      - /etc/cups:/etc/cups
+      - /var/spool/cups:/var/spool/cups
+      - /var/log/cups:/var/log/cups
+      - /run/cups:/run/cups
+      # 挂载 host 源码到容器，修改后只需 docker restart cups-web-print
+      - ./ipp_client.py:/app/ipp_client.py:ro
+      - ./app.py:/app/app.py:ro
+      - ./preview_routes.py:/app/preview_routes.py:ro
+      - ./templates:/app/templates:ro
+      - ./static:/app/static:ro
+      # 持久化上传和预览文件
+      - ./uploads:/app/uploads
+      - ./previews:/app/previews
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:5000/api/printers?async=true\")'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

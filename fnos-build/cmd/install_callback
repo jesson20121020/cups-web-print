@@ -1,0 +1,102 @@
+#!/bin/bash
+# install_callback — 应用文件落地后执行（包用户上下文）
+# 准备数据目录、创建 Python venv、安装 pip 依赖、确保 CUPS 在运行。
+# 风格对齐 techysy/deepseek-harness-fnos install_callback。
+set -uo pipefail
+
+APP_NAME="${TRIM_APPNAME:-cups-web-print}"
+APP_DIR="${TRIM_APPDEST:-/var/apps/${APP_NAME}}"
+
+# 数据目录：优先 TRIM_PKGVAR
+DATA_DIR=""
+if [ -n "${TRIM_PKGVAR:-}" ]; then
+    DATA_DIR="${TRIM_PKGVAR}"
+else
+    DATA_DIR="${APP_DIR}/var"
+fi
+
+LOG="${DATA_DIR}/install.log"
+mkdir -p "${DATA_DIR}" 2>/dev/null || true
+exec >> "${LOG}" 2>&1
+echo "=========================================="
+echo "[$(date '+%F %T')] install_callback start (user=$(id -un) uid=$(id -u))"
+
+# 应用代码路径（实测 fnOS 把 app.tgz 内容落到 ${TRIM_APPDEST}/ 根）
+SERVER_DIR=""
+for cand in "${APP_DIR}/server" "${APP_DIR}/target/server"; do
+    if [ -f "${cand}/app.py" ]; then
+        SERVER_DIR="${cand}"
+        break
+    fi
+done
+if [ -z "${SERVER_DIR}" ]; then
+    echo "[$(date '+%F %T')] ERROR: 未找到应用代码（尝试 ${APP_DIR}/server 与 ${APP_DIR}/target/server）"
+    echo "未找到应用代码 ${APP_DIR}/server" > "${TRIM_TEMP_LOGFILE:-/dev/null}"
+    exit 1
+fi
+echo "[$(date '+%F %T')] 应用代码路径: ${SERVER_DIR}"
+REQUIREMENTS="${SERVER_DIR}/requirements.txt"
+if [ ! -f "${REQUIREMENTS}" ]; then
+    echo "[$(date '+%F %T')] ERROR: 未找到依赖文件 ${REQUIREMENTS}"
+    echo "未找到依赖文件 ${REQUIREMENTS}" > "${TRIM_TEMP_LOGFILE:-/dev/null}"
+    exit 1
+fi
+
+# 导出 PATH（fnOS 调度脚本时不导出）
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# 创建数据目录
+mkdir -p "${DATA_DIR}/uploads" "${DATA_DIR}/previews" 2>/dev/null || true
+echo "[$(date '+%F %T')] 数据目录: ${DATA_DIR}/{uploads,previews}"
+
+# Python venv
+VENV_DIR="${DATA_DIR}/venv"
+VENV_PY="${VENV_DIR}/bin/python3"
+
+# 选择 python3 二进制（fnOS 默认装 python3；若系统带 python3.11/3.12 也兼容）
+PYTHON3=""
+for cand in /usr/bin/python3 /usr/bin/python3.11 /usr/bin/python3.12 /usr/bin/python3.10; do
+    if [ -x "${cand}" ]; then
+        PYTHON3="${cand}"
+        break
+    fi
+done
+if [ -z "${PYTHON3}" ]; then
+    echo "[$(date '+%F %T')] ERROR: 未检测到 python3 二进制"
+    echo "未检测到 python3" > "${TRIM_TEMP_LOGFILE:-/dev/null}"
+    exit 1
+fi
+echo "[$(date '+%F %T')] python3 = ${PYTHON3}"
+
+# 创建 venv（首次安装）
+if [ ! -x "${VENV_PY}" ]; then
+    echo "[$(date '+%F %T')] 创建 Python venv: ${VENV_DIR}"
+    "${PYTHON3}" -m venv "${VENV_DIR}" 2>&1
+    if [ ! -x "${VENV_PY}" ]; then
+        echo "[$(date '+%F %T')] ERROR: venv 创建失败"
+        echo "Python venv 创建失败" > "${TRIM_TEMP_LOGFILE:-/dev/null}"
+        exit 1
+    fi
+fi
+
+# 安装 pip 依赖
+echo "[$(date '+%F %T')] 安装 Python 依赖（首次约 1-3 分钟）..."
+"${VENV_PY}" -m pip install --quiet --upgrade pip 2>&1 | tail -5
+"${VENV_PY}" -m pip install --quiet -r "${REQUIREMENTS}" 2>&1 | tail -10
+PIP_RC=${PIPESTATUS[0]}
+if [ "${PIP_RC}" -ne 0 ]; then
+    echo "[$(date '+%F %T')] ERROR: pip install 失败 (rc=${PIP_RC})"
+    echo "Python 依赖安装失败，请查看日志：${LOG}" > "${TRIM_TEMP_LOGFILE:-/dev/null}"
+    exit 1
+fi
+echo "[$(date '+%F %T')] Python 依赖安装完成"
+
+# 验证依赖
+echo "[$(date '+%F %T')] 验证依赖..."
+"${VENV_PY}" -c "import flask, werkzeug, img2pdf; print('flask', flask.__version__); print('werkzeug', werkzeug.__version__); print('img2pdf OK')" 2>&1
+
+# 注：CUPS 自启、apt 装 LibreOffice 已在 install_init（特权上下文）完成，
+# 此处不再重复（包用户上下文跑不了 apt，徒增 systemctl 失败噪声）。
+
+echo "[$(date '+%F %T')] install_callback done"
+exit 0

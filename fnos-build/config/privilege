@@ -1,0 +1,11 @@
+{
+  "defaults": {
+    "run-as": "package"
+  },
+  "username": "cups-web-print",
+  "groupname": "cups-web-print",
+  "join-groups": [
+    "lp",
+    "lpadmin"
+  ]
+}

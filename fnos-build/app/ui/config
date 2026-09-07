@@ -1,0 +1,29 @@
+{
+  ".url": {
+    "cups-web-print.main": {
+      "title": "Web 打印服务",
+      "icon": "images/{0}.png",
+      "type": "iframe",
+      "protocol": "http",
+      "port": "5000",
+      "url": "/",
+      "allUsers": true,
+      "control": {"accessPerm": "readwrite", "trash": true}
+    },
+    "cups-web-print.print": {
+      "title": "用 Web 打印服务打印",
+      "icon": "images/{0}.png",
+      "type": "iframe",
+      "protocol": "http",
+      "port": "5000",
+      "url": "/?path={path}",
+      "allUsers": true,
+      "noDisplay": true,
+      "fileTypes": [
+        "pdf", "png", "jpg", "jpeg", "gif", "bmp", "tiff", "tif", "webp",
+        "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt"
+      ],
+      "control": {"accessPerm": "readwrite"}
+    }
+  }
+}

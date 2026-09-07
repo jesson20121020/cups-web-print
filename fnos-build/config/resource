@@ -1,0 +1,18 @@
+{
+  "data-share": {
+    "shares": [
+      {
+        "name": "cups-web-print/uploads",
+        "permission": {
+          "rw": ["cups-web-print"]
+        }
+      },
+      {
+        "name": "cups-web-print/previews",
+        "permission": {
+          "rw": ["cups-web-print"]
+        }
+      }
+    ]
+  }
+}

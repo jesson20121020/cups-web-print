@@ -1,0 +1,24 @@
+#!/bin/bash
+# uninstall_init — 卸载前
+set -uo pipefail
+
+APP_NAME="${TRIM_APPNAME:-cups-web-print}"
+APP_DIR="${TRIM_APPDEST:-/var/apps/${APP_NAME}}"
+DATA_DIR="${TRIM_PKGVAR:-${APP_DIR}/var}"
+
+# 停掉应用（直接调用 cmd/main stop）
+MAIN="${APP_DIR}/cmd/main"
+if [ -x "${MAIN}" ]; then
+    "${MAIN}" stop 2>/dev/null || true
+fi
+
+# 兜底：清理可能的子进程
+pkill -f "${APP_DIR}/server/app.py" 2>/dev/null || true
+pkill -f "${APP_DIR}/target/server/app.py" 2>/dev/null || true
+
+# 写日志（如果数据目录还在）
+if [ -d "${DATA_DIR}" ]; then
+    echo "[$(date '+%F %T')] uninstall_init done" >> "${DATA_DIR}/install.log" 2>/dev/null || true
+fi
+
+exit 0

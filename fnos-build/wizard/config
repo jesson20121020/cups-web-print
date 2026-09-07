@@ -1,0 +1,11 @@
+[
+  {
+    "stepTitle": "Web 打印服务",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "Web 打印服务通过飞牛统一网关访问，无需配置端口。\n\n访问路径：NAS 域名 /app/cups-web-print"
+      }
+    ]
+  }
+]

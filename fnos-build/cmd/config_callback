@@ -1,0 +1,14 @@
+#!/bin/bash
+# config_callback — 配置变更后
+# 端口变更后需要重启服务以应用新端口
+set -uo pipefail
+
+APP_NAME="${TRIM_APPNAME:-cups-web-print}"
+APP_DIR="${TRIM_APPDEST:-/var/apps/${APP_NAME}}"
+
+MAIN="${APP_DIR}/cmd/main"
+if [ -x "${MAIN}" ]; then
+    "${MAIN}" start 2>/dev/null || true
+fi
+
+exit 0

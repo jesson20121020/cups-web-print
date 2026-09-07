@@ -1,0 +1,23 @@
+#!/bin/bash
+# uninstall_callback — 卸载清理
+# 尊重向导选择：wizard_delete_data=true 才删数据；否则保留以备重装。
+set -uo pipefail
+
+APP_NAME="${TRIM_APPNAME:-cups-web-print}"
+APP_DIR="${TRIM_APPDEST:-/var/apps/${APP_NAME}}"
+DATA_DIR="${TRIM_PKGVAR:-${APP_DIR}/var}"
+
+if [ "${wizard_delete_data:-false}" = "true" ]; then
+    echo "[$(date '+%F %T')] 卸载清理：删除 ${DATA_DIR}"
+    rm -rf "${DATA_DIR}" 2>/dev/null || true
+    # 清理 tmp
+    rm -rf "${APP_DIR}/tmp"/* 2>/dev/null || true
+    # 清理 etc
+    rm -rf "/var/apps/${APP_NAME}/etc"/* 2>/dev/null || true
+    # 清理 home
+    rm -rf "${APP_DIR}/home"/* 2>/dev/null || true
+else
+    echo "[$(date '+%F %T')] 保留数据目录 ${DATA_DIR}"
+fi
+
+exit 0

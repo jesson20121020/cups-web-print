@@ -18,3 +18,27 @@ uploads/*
 !uploads/.gitkeep
 previews/*
 !previews/.gitkeep
+previews/.ink_estimate_state.json
+
+# ---- 项目自定义忽略 ----
+
+# 应用运行日志（包括轮转历史）
+app.log
+app.log.*
+app.log.*.*
+
+# 测试 / 旧版打包产物
+old.fpk
+test_app.fpk
+
+# 诊断信息目录
+.diag/
+
+# fnOS FPK 打包产物（保留源码、manifest、脚本；产物 .fpk 不入库）
+fnos-build/*.fpk
+!fnos-build/.gitkeep
+
+# 临时调试文件
+*.tmp
+*.swp
+.DS_Store

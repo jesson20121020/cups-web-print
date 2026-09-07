@@ -257,6 +257,27 @@ libreoffice --version
 sudo apt-get install --reinstall libreoffice-writer libreoffice-calc libreoffice-impress
 ```
 
+#### v3.0.7 起：安装向导"安装 LibreOffice"开关已接通
+在 fnOS 应用中心重装本应用时，安装向导第一步会出现 **"安装 LibreOffice（用于 DOCX/PPTX/XLSX 预览）"** 开关：
+
+- **勾选** → fnOS 在安装阶段自动 `apt-get install --no-install-recommends libreoffice`（meta-package，含 writer/impress/calc/draw/math/base，约 800MB，**首次安装约需 5-10 分钟**）。
+- **不勾选** → DOCX/PPTX/XLSX 无法预览；**且 JPG/PNG 等普通图片的转换在 img2pdf 失败时（常见于 iPhone 拍摄的 EXIF 异常的 JPEG）也无法降级到 LibreOffice**，会导致整张图预览失败。PDF/SVG 不受影响。建议默认勾选。
+
+可通过 SSH 验证安装结果：
+
+```bash
+# 1) 看应用日志（apt 输出会被记录）
+cat /var/apps/cups-web-print/var/install.log    # 或 TRIM_PKGVAR 指向的目录
+grep -i 'libreoffice\|apt-get' /var/apps/cups-web-print/var/install.log | tail -20
+
+# 2) 手动确认 libreoffice 可用
+libreoffice --version
+which libreoffice
+
+# 3) 若向导未勾选，可手动装（root）
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libreoffice
+```
+
 ### 问题：PDF 预览无法生成
 ```bash
 # 验证 pdftoppm 是否安装
@@ -561,6 +582,27 @@ libreoffice --version
 
 # Reinstall LibreOffice
 sudo apt-get install --reinstall libreoffice-writer libreoffice-calc libreoffice-impress
+```
+
+#### Since v3.0.7: install wizard "Install LibreOffice" toggle is wired
+When reinstalling this app from the fnOS App Center, the first install-wizard step now exposes an **"Install LibreOffice (for DOCX/PPTX/XLSX preview)"** toggle:
+
+- **Checked** → fnOS auto-runs `apt-get install --no-install-recommends libreoffice` (meta-package including writer/impress/calc/draw/math/base, ~800MB; **first-time install takes 5-10 minutes**).
+- **Unchecked** → DOCX/PPTX/XLSX cannot be previewed; **and JPG/PNG etc. have no LibreOffice fallback when img2pdf fails** (common with iPhone JPEGs that have unusual EXIF orientation), so those images also fail to preview. PDF/SVG remain unaffected. Recommended: leave it checked.
+
+Verify via SSH:
+
+```bash
+# 1) Inspect install log (apt output is recorded)
+cat /var/apps/cups-web-print/var/install.log    # or wherever TRIM_PKGVAR points
+grep -i 'libreoffice\|apt-get' /var/apps/cups-web-print/var/install.log | tail -20
+
+# 2) Confirm libreoffice is callable
+libreoffice --version
+which libreoffice
+
+# 3) If you skipped the toggle during install, install manually (root)
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libreoffice
 ```
 
 ### Issue: PDF preview generation failed
