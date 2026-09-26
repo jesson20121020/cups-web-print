@@ -69,10 +69,7 @@
         .section-body {
             padding: 0.25rem 1rem 1rem;
         }
-        /* 手机端：详细打印设置默认折叠；桌面端默认展开 */
-        @media (max-width: 1023px) {
-            details#advancedSettings { /* 默认折叠（无 open 属性） */ }
-        }
+        /* 全部面板默认展开，不折叠 */
         /* 核心控件（打印机/纸张/打印按钮）样式强调 */
         .core-controls {
             background: white;
@@ -95,6 +92,23 @@
         .page-image:hover {
             transform: scale(1.02);
             cursor: pointer;
+        }
+
+        /* ---- 大屏（2K/4K 等）自适应 ----
+           容器加宽到视口 96%，侧栏与预览图同步加大；
+           通过调大 html 根字号（rem 基准）整体放大 Tailwind 字号/间距，避免 4K 下显得过小。 */
+        @media (min-width: 1920px) {
+            .container.max-w-6xl { max-width: min(96vw, 1920px); }
+            .layout-side { width: 400px; }
+            .page-image { max-height: 780px; }
+        }
+        @media (min-width: 2560px) {
+            html { font-size: 22px; }
+            .container.max-w-6xl { max-width: min(96vw, 2400px); }
+        }
+        @media (min-width: 3840px) {
+            html { font-size: 28px; }
+            .container.max-w-6xl { max-width: min(92vw, 3200px); }
         }
 
     </style>
@@ -231,8 +245,8 @@
                 </div>
             </div>
 
-            <!-- 3. 详细打印设置（桌面默认展开 / 手机默认折叠） -->
-            <details class="section-collapse" id="advancedSettings">
+            <!-- 3. 详细打印设置（全部展开） -->
+            <details class="section-collapse" id="advancedSettings" open>
                 <summary>
                     <span class="flex items-center gap-2">
                         <svg class="w-5 h-5 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -336,10 +350,10 @@
                 </div>
             </details>
 
-            <!-- 4. 已上传文件（默认折叠） -->
+            <!-- 4. 已上传文件（全部展开） -->
             </div>
             <div class="layout-side">
-            <details class="section-collapse">
+            <details class="section-collapse" open>
                 <summary>
                     <span class="flex items-center gap-2">
                         <svg class="w-5 h-5 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -350,14 +364,14 @@
                     <button id="refreshFiles" class="text-xs text-blue-500 hover:text-blue-700" onclick="event.stopPropagation()">刷新</button>
                 </summary>
                 <div class="section-body">
-                    <div id="filesList" class="space-y-2 max-h-60 overflow-y-auto">
+                    <div id="filesList" class="space-y-2">
                         <p class="text-gray-500 text-xs text-center py-2">加载中...</p>
                     </div>
                 </div>
             </details>
 
-            <!-- 5. 已提交任务 + 打印机信息（默认折叠） -->
-            <details class="section-collapse">
+            <!-- 5. 已提交任务 + 打印机信息（全部展开） -->
+            <details class="section-collapse" open>
                 <summary>
                     <span class="flex items-center gap-2">
                         <svg class="w-5 h-5 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -387,7 +401,7 @@
                             全部删除
                         </button>
                     </div>
-                    <div id="jobsList" class="space-y-2 max-h-60 overflow-y-auto">
+                    <div id="jobsList" class="space-y-2">
                         <p class="text-gray-500 text-xs text-center py-2">加载中...</p>
                     </div>
 
@@ -506,12 +520,10 @@
 
 
         document.addEventListener('DOMContentLoaded', () => {
-            // 响应式默认展开/折叠：详细打印设置
-            // 桌面端（≥1024px）默认展开，手机端默认折叠；用户手动改后不再覆盖
+            // 所有面板一律展开（不再折叠）
             const advSettings = document.getElementById('advancedSettings');
             if (advSettings) {
-                const isDesktop = window.matchMedia('(min-width: 1024px)').matches;
-                advSettings.open = isDesktop;
+                advSettings.open = true;
             }
 
             // 获取DOM元素
@@ -1897,13 +1909,7 @@
         }
 
         async function loadJobs() {
-            // 保存当前展开的任务 ID
-            const expandedJobIds = new Set();
-            const currentExpanded = document.querySelectorAll('#jobsList .job-details:not(.hidden)');
-            currentExpanded.forEach(el => {
-                const jobId = el.id.replace('job-details-', '');
-                expandedJobIds.add(jobId);
-            });
+            // 全部展开：任务明细始终显示，无折叠
 
             try {
                 const response = await fetch('/api/jobs');
@@ -1964,7 +1970,7 @@
                         ` : ''}
 
                         <!-- 打印参数详情 -->
-                        <div id="job-details-${job.id}" class="job-details ${expandedJobIds.has(job.id) ? '' : 'hidden'} mt-3 pt-3 border-t border-gray-200">
+                        <div id="job-details-${job.id}" class="job-details mt-3 pt-3 border-t border-gray-200">
                             <div class="grid grid-cols-2 gap-2 text-xs">
                                 <div class="flex">
                                     <span class="text-gray-500 w-20">色彩模式:</span>
@@ -2284,9 +2290,10 @@
         }
 
         function toggleJobDetails(jobId) {
+            // 任务明细已全部展开，保留此函数避免点击报错
             const detailsDiv = document.getElementById(`job-details-${jobId}`);
             if (detailsDiv) {
-                detailsDiv.classList.toggle('hidden');
+                detailsDiv.classList.remove('hidden');
             }
         }
 

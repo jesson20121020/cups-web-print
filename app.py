@@ -18,6 +18,8 @@ import logging
 import re
 import shutil
 import glob
+import tempfile
+from urllib.parse import urlparse
 
 # 应用版本号：从根目录 version 文件读取（纯数字，如 1.8），显示时加 v 前缀
 def _read_version():
@@ -624,6 +626,158 @@ def get_printer_uri(printer_name):
         return None
 
 
+# ---- 打印机 URI 自愈：ipp-usb 虚拟端口漂移自动修复 ----
+# ipp-usb 把 USB 打印机映射为 127.0.0.1:60000 起的虚拟 IPP 端点；
+# 打印机 USB 重枚举（断电重启/拔插/卡纸处理）后端口可能漂移（如 60001→60000），
+# 导致 CUPS 队列 URI 失效、监控显示"离线"/"Host is down"。
+# 这里在探测失败时自动扫描候选端口，找到同型号打印机后 lpadmin 修正队列 URI。
+
+_heal_lock = threading.Lock()
+
+
+def _get_printer_description(printer_name):
+    """从 lpstat -l 取队列 Description（如 Canon TS3380 (IPP-over-USB)），用于识别打印机型号。"""
+    try:
+        result = _lpstat(['-l', '-p', printer_name])
+        if result.returncode == 0:
+            for line in result.stdout.split('\n'):
+                if line.strip().lower().startswith('description:'):
+                    return line.split(':', 1)[1].strip()
+    except Exception as e:
+        logger.debug(f"读取打印机描述失败 {printer_name}: {e}")
+    return ''
+
+
+def _probe_ipp_endpoint(uri, timeout=3):
+    """用 ipptool 探测候选 IPP 端点，成功返回 {'make_model','printer_name'}，失败返回 None。"""
+    if not IPPTOOL_AVAILABLE:
+        return None
+    test_content = (
+        '{\n'
+        '    NAME "Heal-Probe"\n'
+        '    OPERATION Get-Printer-Attributes\n'
+        '    GROUP operation\n'
+        '    ATTR charset attributes-charset utf-8\n'
+        '    ATTR language attributes-natural-language en\n'
+        '    ATTR uri printer-uri ' + uri + '\n'
+        '    ATTR keyword requested-attributes printer-state,make-and-model,printer-name\n'
+        '}\n'
+    )
+    fd, test_file = tempfile.mkstemp(suffix='.test')
+    try:
+        os.write(fd, test_content.encode('utf-8'))
+        os.close(fd)
+        result = subprocess.run(
+            ['ipptool', '-tv', '-T', str(timeout), uri, test_file],
+            capture_output=True, text=True, timeout=timeout + 3)
+        if '[PASS]' in result.stdout:
+            mm = re.search(r'make-and-model.*?=\s*(.+)', result.stdout)
+            pn = re.search(r'printer-name.*?=\s*(.+)', result.stdout)
+            return {
+                'make_model': mm.group(1).strip() if mm else '',
+                'printer_name': pn.group(1).strip() if pn else '',
+            }
+    except (subprocess.TimeoutExpired, OSError) as e:
+        logger.debug(f"探测 {uri} 失败: {e}")
+    except Exception as e:
+        logger.debug(f"探测 {uri} 异常: {e}")
+    finally:
+        try:
+            os.unlink(test_file)
+        except OSError:
+            pass
+    return None
+
+
+def auto_heal_ipp_usb_uri(printer_name, current_uri, timeout=3):
+    """
+    ipp-usb 虚拟端口漂移自愈。
+
+    仅当当前队列 URI 是 127.0.0.1/localhost 的 ipp:// 端点且探测失败时调用：
+    扫描 60000-60010，找到型号匹配的 IPP 打印机端点，并用 lpadmin 修正 CUPS 队列 URI。
+
+    Args:
+        printer_name: CUPS 队列名
+        current_uri:  当前队列 URI（可能已失效）
+        timeout:      单端口探测超时（秒）
+
+    Returns:
+        bool: 是否修复成功
+    """
+    if not current_uri:
+        return False
+    try:
+        parsed = urlparse(current_uri)
+    except Exception:
+        return False
+    if parsed.scheme not in ('ipp', 'ipps') or parsed.hostname not in ('127.0.0.1', 'localhost', '::1'):
+        return False
+    if not IPPTOOL_AVAILABLE:
+        logger.warning(f"打印机自愈跳过（ipptool 不可用）：{printer_name}")
+        return False
+
+    # 期望识别令牌：从队列描述与队列名提取品牌/型号（如 canon / ts3380）
+    brands = ('canon', 'hp', 'epson', 'brother', 'pixma', 'lexmark', 'xerox', 'samsung', 'ricoh')
+    raw_tokens = re.findall(r'[a-z0-9]+', _get_printer_description(printer_name).lower()) \
+        + re.findall(r'[a-z0-9]+', printer_name.lower())
+    expected = []
+    for t in raw_tokens:
+        if len(t) < 3 or t in expected:
+            continue
+        if t in brands or re.search(r'\d', t):
+            expected.append(t)
+    if not expected:
+        expected = [t for t in raw_tokens if len(t) >= 3][:4]  # 兜底：任意非短令牌
+    logger.info(f"打印机自愈扫描：queue={printer_name}, uri={current_uri}, 识别令牌={expected or ['任意IPP端点']}")
+
+    with _heal_lock:
+        # 1. 收集所有存活的 IPP 端点（ipptool Get-Printer-Attributes 通过者）
+        live = []  # [(uri, info)]
+        for port in range(60000, 60011):
+            candidate = f'ipp://127.0.0.1:{port}/ipp/print'
+            if candidate == current_uri:
+                continue
+            info = _probe_ipp_endpoint(candidate, timeout=timeout)
+            if info:
+                live.append((candidate, info))
+
+        if not live:
+            logger.warning(f"打印机自愈：60000-60010 范围内未发现任何存活 IPP 端点，无法自愈")
+            return False
+
+        # 2. 选定目标：
+        #    - 仅一个存活端点 → 就是同一台打印机（ipp-usb 只为真实 USB 打印机开端点）
+        #    - 多个存活端点 → 用型号令牌甄别，匹配不上则放弃，避免误绑定
+        chosen = None
+        if len(live) == 1:
+            chosen = live[0][0]
+            logger.info(f"打印机自愈：范围内仅 {chosen} 一个存活端点，判定为同一台打印机")
+        else:
+            for candidate, info in live:
+                hay = (info.get('make_model', '') + ' ' + info.get('printer_name', '')).lower()
+                if expected and any(tok in hay for tok in expected if tok):
+                    chosen = candidate
+                    logger.info(f"打印机自愈：端点 {candidate} 型号匹配（{hay.strip() or '无型号信息'}）")
+                    break
+            if chosen is None:
+                logger.warning(f"打印机自愈：存在 {len(live)} 个存活端点且型号无法匹配，跳过以避免误绑定")
+                return False
+
+        # 3. lpadmin 修正 CUPS 队列 URI
+        logger.warning(f"打印机自愈：发现新端点 {chosen}（原 {current_uri}），正在修正 CUPS 队列...")
+        try:
+            res = subprocess.run(
+                ['lpadmin', '-p', printer_name, '-v', chosen],
+                capture_output=True, text=True, timeout=timeout + 5)
+            if res.returncode == 0:
+                logger.warning(f"打印机自愈成功：{printer_name} {current_uri} -> {chosen}")
+                return True
+            logger.error(f"打印机自愈失败（lpadmin）：{res.stderr.strip()}")
+        except (subprocess.TimeoutExpired, OSError) as e:
+            logger.error(f"打印机自愈失败（lpadmin 异常）：{e}")
+        return False
+
+
 
 
 def get_single_printer_status(printer_name, timeout=5):
@@ -677,6 +831,17 @@ def get_single_printer_status(printer_name, timeout=5):
                     # 如果探测离线，更新状态显示
                     if status == 'idle':
                         status = 'offline'
+                    # ★ 自愈：ipp-usb 虚拟端口漂移时自动扫描并修正 CUPS 队列 URI，然后复测
+                    healed = auto_heal_ipp_usb_uri(printer_name, printer_uri, timeout=timeout)
+                    if healed:
+                        printer_uri = get_printer_uri(printer_name)
+                        probe_result = check_printer_online(printer_uri, timeout=timeout)
+                        if probe_result.get('online'):
+                            online_status = 'online'
+                            status = 'ready'
+                            logger.warning(f"打印机 {printer_name} 自愈后恢复在线：{printer_uri}")
+                        else:
+                            logger.warning(f"打印机 {printer_name} 已修正 URI 但仍探测失败：{printer_uri} -> {probe_result}")
                 logger.debug(f"打印机 {printer_name} 在线检测：{probe_result}")
             except Exception as e:
                 logger.warning(f"打印机 {printer_name} 在线检测失败：{e}")

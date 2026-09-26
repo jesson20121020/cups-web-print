@@ -1,5 +1,5 @@
 appname         = cups-web-print
-version                 = 3.0.8
+version                 = 3.0.9
 display_name    = Web 打印服务
 display_name_en = Web Print Service
 desc            = <div>基于 Python Flask 和 CUPS 的 Web 打印服务，支持文件上传、实时预览（PDF.js）、打印设置与任务管理。</div><div>- 支持 PDF、图片、DOCX/PPTX/XLSX 等格式上传与在线预览</div><div>- 集成 PDF.js 实时预览面板</div><div>- 支持纸张大小、双面、彩打、份数、页面范围等参数</div><div>- 集成 fnOS 文件管理器：右键 → "用 Web 打印服务打开" 自动预览</div><div>- 基于 IPP 协议管理 CUPS 打印队列</div>
@@ -20,6 +20,6 @@ checkport       = true
 disable_authorization_path = true
 ctl_stop        = true
 micro_app       = false
-changelog       = <div>v3.0.8 - 修复：安装向导"安装 LibreOffice"勾选项此前从未被读取。v3.0.7 误改在 fnpack 未实际调用的 service-setup 钩子里，本次（v3.0.8）改在 fnpack 标准特权钩子 install_init（应用文件落地前执行、root 上下文）中真正接通：勾选后自动 apt-get install --no-install-recommends libreoffice，未勾选则跳过；CUPS 自动补装/自启也一并移到这里（之前 install_callback 是包用户上下文，跑不了 apt）。失败不阻断安装，结果写到 ${DATA_DIR}/.libreoffice_installed。</div><div>v3.0.7 - 该版本改动未生效（改在 service-setup 而 fnOS 不调用），仅做 changelog 占位</div><div>v3.0.6 - 改 service_port=5000 模式（类似 dsh），fnOS 自动 /app/cups-web-print/fngateway/ 反代到 localhost:5000，不依赖 base 标签</div>
+changelog       = <div>v3.0.9 - 新增打印机 URI 自愈：ipp-usb 把 USB 打印机映射为 127.0.0.1:60000 起的虚拟端口，打印机断电重启/拔插后端口可能漂移导致"离线/Host is down"；现在探测失败时自动扫描 60000-60010 找到同型号打印机并自动 lpadmin 修正 CUPS 队列 URI，页面无需手动干预即恢复在线。前端适配大屏：2K/4K 下容器加宽（最高 3200px）并按屏幕倍数放大整体字号与组件尺寸；所有面板与任务明细默认全部展开，不再折叠。</div><div>v3.0.8 - 修复：安装向导"安装 LibreOffice"勾选项此前从未被读取。v3.0.7 误改在 fnpack 未实际调用的 service-setup 钩子里，本次（v3.0.8）改在 fnpack 标准特权钩子 install_init（应用文件落地前执行、root 上下文）中真正接通：勾选后自动 apt-get install --no-install-recommends libreoffice，未勾选则跳过；CUPS 自动补装/自启也一并移到这里（之前 install_callback 是包用户上下文，跑不了 apt）。失败不阻断安装，结果写到 ${DATA_DIR}/.libreoffice_installed。</div><div>v3.0.7 - 该版本改动未生效（改在 service-setup 而 fnOS 不调用），仅做 changelog 占位</div><div>v3.0.6 - 改 service_port=5000 模式（类似 dsh），fnOS 自动 /app/cups-web-print/fngateway/ 反代到 localhost:5000，不依赖 base 标签</div>
 checksum                = 72fd0d8f679cf47b91b1b1cfcd9b9510
 fpk_version     =
