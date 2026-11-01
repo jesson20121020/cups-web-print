@@ -1155,7 +1155,16 @@ def convert_image_to_pdf(input_file, output_dir):
     if IMG2PDF_AVAILABLE:
         try:
             with open(input_file, 'rb') as f:
-                pdf_bytes = img2pdf.convert(f.read())
+                image_data = f.read()
+            # rotation=ifvalid：iPhone 拍的照片常写入非法 EXIF Orientation=0，
+            # img2pdf 默认（None=auto）遇到非法值直接抛 ExifOrientationError，
+            # 白白降级到 LibreOffice（慢、且有损重编码）。ifvalid 对非法值忽略方位、
+            # 对合法值仍按 EXIF 自动摆正。
+            convert_kwargs = {}
+            img2pdf_rotation = getattr(getattr(img2pdf, 'Rotation', None), 'ifvalid', None)
+            if img2pdf_rotation is not None:
+                convert_kwargs['rotation'] = img2pdf_rotation
+            pdf_bytes = img2pdf.convert(image_data, **convert_kwargs)
             with open(pdf_path, 'wb') as f:
                 f.write(pdf_bytes)
             if os.path.exists(pdf_path):
@@ -1179,7 +1188,8 @@ def get_preview_file(original_filename):
     Returns:
         预览文件路径（PDF），如果无法预览返回 None
 
-    注意：PDF 复制和文档转换应在 api_upload() 中完成，这里只返回已存在的路径
+    注意：优先返回 previews/ 里已存在的 PDF；缺失时（图片原图直传、文档上传时
+    转换失败）按需自愈转换一次，避免整条预览/打印链路报「预览文件不存在」。
     """
     # 安全检查：只获取文件名，移除路径部分
     original_filename = os.path.basename(original_filename)
@@ -1190,7 +1200,9 @@ def get_preview_file(original_filename):
         pdf_path = get_safe_path(app.config['PREVIEW_FOLDER'], original_filename)
         if pdf_path and os.path.exists(pdf_path):
             return pdf_path
-        return None
+        source_path = get_safe_path(app.config['UPLOAD_FOLDER'], original_filename)
+        pdf_path, _error = ensure_preview_pdf(source_path, original_filename)
+        return pdf_path
 
     # 图片和文档：返回 previews/目录的 {basename}.pdf
     if is_image_file(original_filename) or is_document_file(original_filename):
@@ -1198,7 +1210,9 @@ def get_preview_file(original_filename):
         pdf_path = get_safe_path(app.config['PREVIEW_FOLDER'], pdf_filename)
         if pdf_path and os.path.exists(pdf_path):
             return pdf_path
-        return None
+        source_path = get_safe_path(app.config['UPLOAD_FOLDER'], original_filename)
+        pdf_path, _error = ensure_preview_pdf(source_path, original_filename)
+        return pdf_path
 
     return None
 
@@ -1250,9 +1264,60 @@ def get_printers_fast():
 
 
 
+def _parse_page_selection(page_range, total_pages):
+    """把 '1-5 8 10-12' 解析成 0 基页索引列表（保持顺序、去重、越界报错）"""
+    pages = []
+    for part in page_range.replace(',', ' ').split():
+        if '-' in part:
+            start_s, _, end_s = part.partition('-')
+            start, end = int(start_s), int(end_s)
+            if start > end:
+                start, end = end, start
+            page_numbers = list(range(start, end + 1))
+        else:
+            page_numbers = [int(part)]
+        for page_number in page_numbers:
+            if page_number < 1 or page_number > total_pages:
+                raise ValueError(f"页码 {page_number} 超出范围（文档共 {total_pages} 页）")
+            if (page_number - 1) not in pages:
+                pages.append(page_number - 1)
+    return pages
+
+
+def _extract_pdf_pages_with_pikepdf(input_pdf, page_range, output_pdf):
+    """pdftk 不可用时的兜底：用 pikepdf（img2pdf 的依赖，随 venv 一起安装）抽页"""
+    try:
+        import pikepdf
+    except ImportError:
+        return None, "页面提取工具不可用（pdftk / pikepdf 均未安装）"
+    try:
+        with pikepdf.open(input_pdf) as src:
+            total_pages = len(src.pages)
+            indices = _parse_page_selection(page_range, total_pages)
+            if not indices:
+                return None, "页面范围为空"
+            out = pikepdf.Pdf.new()
+            for index in indices:
+                out.pages.append(src.pages[index])
+            out.save(output_pdf)
+        if os.path.exists(output_pdf) and os.path.getsize(output_pdf) > 0:
+            logger.info(f"PDF 页面提取成功（pikepdf）：{output_pdf}")
+            return output_pdf, None
+        return None, "PDF 页面提取失败（pikepdf 未生成文件）"
+    except ValueError as e:
+        logger.error(f"页面范围解析失败：{e}")
+        return None, f"页面范围无效：{e}"
+    except Exception as e:
+        logger.error(f"pikepdf 页面提取异常：{e}")
+        return None, f"PDF 页面提取异常：{e}"
+
+
 def extract_pdf_pages_to_tmp(input_pdf, page_range):
     """
-    使用 pdftk 提取 PDF 指定页面到 /tmp 目录（系统重启后自动清除）
+    提取 PDF 指定页面到 /tmp 目录（系统重启后自动清除）
+
+    优先用 pdftk（Docker 镜像里装了 pdftk-java）；fnOS 安装包没有 pdftk，
+    此时用 venv 内的 pikepdf 兜底，避免页范围打印直接报“pdftk 未安装”。
 
     Args:
         input_pdf: 输入 PDF 路径
@@ -1267,32 +1332,34 @@ def extract_pdf_pages_to_tmp(input_pdf, page_range):
         unique_id = uuid.uuid4().hex[:8]
         output_pdf = os.path.join('/tmp', f"print_{base_name}_{unique_id}_pages_{page_range.replace('-', '_').replace(',', '_').replace(' ', '_')}.pdf")
 
-        # 检查 pdftk 是否可用
+        # 1) 优先 pdftk
+        use_pdftk = True
         try:
             result = subprocess.run(['pdftk', '--version'], capture_output=True, text=True, timeout=5)
             logger.info(f"pdftk 版本：{result.stdout.strip()[:100] if result.stdout else 'available'}")
         except FileNotFoundError:
-            logger.error("pdftk 未安装")
-            return None, "pdftk 未安装，无法提取页面"
+            logger.warning("pdftk 未安装，改用 pikepdf 提取页面")
+            use_pdftk = False
         except subprocess.TimeoutExpired:
-            return None, "pdftk 响应超时"
+            logger.warning("pdftk 响应超时，改用 pikepdf 提取页面")
+            use_pdftk = False
 
-        # 使用 pdftk 提取页面到/tmp
-        # pdftk 需要空格分隔的参数，如：pdftk input.pdf cat 2 4 output out.pdf
-        # 将 page_range 按空格分割成多个参数
-        page_parts = page_range.split()
-        cmd = ['pdftk', input_pdf, 'cat'] + page_parts + ['output', output_pdf]
-        logger.info(f"提取 PDF 页面到/tmp: {cmd}")
+        if use_pdftk:
+            # pdftk 需要空格分隔的参数，如：pdftk input.pdf cat 2 4 output out.pdf
+            page_parts = page_range.split()
+            cmd = ['pdftk', input_pdf, 'cat'] + page_parts + ['output', output_pdf]
+            logger.info(f"提取 PDF 页面到/tmp: {cmd}")
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            if result.returncode == 0 and os.path.exists(output_pdf) and os.path.getsize(output_pdf) > 0:
+                logger.info(f"PDF 页面提取成功：{output_pdf}")
+                return output_pdf, None
 
-        if result.returncode == 0 and os.path.exists(output_pdf):
-            logger.info(f"PDF 页面提取成功：{output_pdf}")
-            return output_pdf, None
+            error_msg = result.stderr.strip() if result.stderr else "未知错误"
+            logger.warning(f"pdftk 提取失败，改用 pikepdf 兜底：{error_msg}")
 
-        error_msg = result.stderr.strip() if result.stderr else "未知错误"
-        logger.error(f"PDF 页面提取失败：{error_msg}")
-        return None, f"PDF 页面提取失败：{error_msg}"
+        # 2) pikepdf 兜底
+        return _extract_pdf_pages_with_pikepdf(input_pdf, page_range, output_pdf)
 
     except subprocess.TimeoutExpired:
         logger.error("PDF 页面提取超时")
@@ -1302,14 +1369,70 @@ def extract_pdf_pages_to_tmp(input_pdf, page_range):
         return None, f"PDF 页面提取异常：{str(e)}"
 
 
+def ensure_preview_pdf(filepath, filename):
+    """确保 previews/ 目录下存在可打印的 PDF，缺失时按需转换（自愈）
+
+    背景（2026-11 修复「提交失败：预览文件不存在」）：
+      图片上传已改为「原图直传」——只把原图复制到 previews/，不再生成
+      previews/{base}.pdf（见 api_upload() 的 is_image_file 分支）。
+      但打印链路仍统一按 previews/{base}.pdf 取文件，于是任何图片
+      （iOS 相册导出的 jpg/jpeg、PNG 扫描件等）一提交打印就报
+      「预览文件不存在：xxx.pdf，请重新上传」，重新上传也照样失败。
+      另外 Office 文档在上传时若 LibreOffice 转换偶发失败，也会留下同样
+      “有原文件、无预览 PDF”的坑。这里在打印前按需补齐，老文件无需重传。
+
+    Args:
+        filepath: 原始文件路径（uploads/ 下的文件）
+        filename: 原始文件名
+
+    Returns:
+        (pdf_path, error_message)，成功返回 (路径, None)，失败返回 (None, 原因)
+    """
+    base_name = os.path.splitext(filename)[0]
+    pdf_filename = f"{base_name}.pdf"
+    pdf_path = get_safe_path(app.config['PREVIEW_FOLDER'], pdf_filename)
+    if not pdf_path:
+        return None, f"预览文件路径错误：{pdf_filename}"
+    if os.path.exists(pdf_path):
+        return pdf_path, None
+
+    if not filepath or not os.path.exists(filepath):
+        return None, f"预览文件不存在：{pdf_filename}，请重新上传"
+
+    ext = os.path.splitext(filename)[1].lower()
+    logger.warning(f"预览 PDF 缺失，按需转换：{filename} -> {pdf_filename}")
+    converted = None
+    try:
+        if ext == '.pdf':
+            # 原文件本身就是 PDF（previews 里的副本被清理过）：直接复制回预览目录
+            shutil.copy2(filepath, pdf_path)
+            converted = pdf_path if os.path.exists(pdf_path) else None
+        elif is_image_file(filename):
+            converted = convert_image_to_pdf(filepath, app.config['PREVIEW_FOLDER'])
+        elif is_document_file(filename):
+            converted = convert_to_pdf(filepath, app.config['PREVIEW_FOLDER'])
+    except Exception as e:
+        logger.error(f"按需转换预览 PDF 异常：{filename} - {e}")
+        converted = None
+
+    if converted and os.path.exists(converted) and os.path.getsize(converted) > 0:
+        logger.info(f"按需转换成功：{converted}")
+        return converted, None
+
+    logger.error(f"按需转换预览 PDF 失败：{filename}")
+    return None, (f"预览文件不存在：{pdf_filename}，且原文件转换失败，"
+                  "请检查文件是否损坏（Office 文档请确认服务器已安装 LibreOffice）")
+
+
 def get_printable_file(filepath, filename, page_range=None):
     """
     获取可打印的文件路径
     - PDF 和图片：返回 previews/或 uploads/目录的文件路径
-    - Office 文档：返回 previews/目录的预览 PDF（如不存在则返回错误）
+    - Office 文档：返回 previews/目录的预览 PDF（如不存在则尝试即时转换）
     - 如指定页面范围，生成对应页面的临时 PDF 到/tmp 目录（系统重启后自动清除）
 
-    注意：PDF 复制和文档转换应在 api_upload() 中完成，如文件不存在请重新上传
+    previews/ 下缺少 {base_name}.pdf 时（图片原图直传、文档转换失败）会先尝试
+    按需转换一次；转换仍失败时图片退回直接打印原图（CUPS 有图片滤镜链路）。
 
     Args:
         filepath: 原始文件路径
@@ -1329,8 +1452,16 @@ def get_printable_file(filepath, filename, page_range=None):
         logger.error(f"预览文件路径不安全：{pdf_filename}")
         return None, f"预览文件路径错误：{pdf_filename}", False
     if not os.path.exists(pdf_path):
-        logger.error(f"预览 PDF 不存在：{pdf_filename}，请重新上传")
-        return None, f"预览文件不存在：{pdf_filename}，请重新上传", False
+        pdf_path, error = ensure_preview_pdf(filepath, filename)
+        if not pdf_path:
+            # 最后兜底：图片转 PDF 失败时，直接把原图交给 CUPS（该队列 PPD 支持
+            # image/jpeg 直通）。仅在没有页范围要求时可用，页范围只能对 PDF 抽取。
+            if (is_image_file(filename) and filepath and os.path.exists(filepath)
+                    and not (page_range and page_range.strip())):
+                logger.warning(f"回退为直接打印原图：{filepath}")
+                return filepath, None, False
+            logger.error(error)
+            return None, error, False
 
     logger.info(f"使用预览 PDF: {pdf_path}")
     if page_range and page_range.strip():
