@@ -19,6 +19,7 @@ import re
 import shutil
 import glob
 import tempfile
+import socket
 from urllib.parse import urlparse
 
 # 应用版本号：从根目录 version 文件读取（纯数字，如 1.8），显示时加 v 前缀
@@ -780,6 +781,49 @@ def auto_heal_ipp_usb_uri(printer_name, current_uri, timeout=3):
 
 
 
+def _usb_ipp_endpoints_listening(timeout=0.25):
+    """直接 TCP 探测 127.0.0.1:60000-60010，返回可连通的端口列表
+
+    不依赖 ipptool（ipptool 在端点没起来时只会回 “Host is down”，看不出是
+    “ipp-usb 根本没起来”还是“端点起来了但打印机不响应”）。
+    """
+    listening = []
+    for port in range(60000, 60011):
+        try:
+            with socket.create_connection(('127.0.0.1', port), timeout=timeout):
+                listening.append(port)
+        except OSError:
+            continue
+    return listening
+
+
+def get_printer_offline_reason(printer_uri):
+    """离线时给出人能看懂的原因（不可达类型不同，处置方式完全不同）"""
+    uri = (printer_uri or '').lower()
+    if '127.0.0.1' in uri or 'localhost' in uri:
+        ports = _usb_ipp_endpoints_listening()
+        if not ports:
+            return ('打印机 USB 未被系统识别（ipp-usb 端点 60000-60010 都没有监听）。'
+                    '通常是打印机断电/休眠未唤醒、USB 线松脱，或 USB 口卡在枚举失败状态；'
+                    '请检查打印机电源与 USB 线，重新插拔一次打印机。')
+        return ('ipp-usb 端点已在监听但打印机不响应，请检查打印机是否缺纸/卡纸/处于错误状态。')
+    if uri.startswith('usb://'):
+        return '打印机走 USB 私有协议队列，请检查 USB 连接与打印机电源。'
+    return '打印机网络不可达，请检查打印机电源与网络连接（IP 是否变化）。'
+
+
+def get_cups_unreachable_reason(printer_name):
+    """CUPS 明确报“打印机不可用/连不上”时，返回人能看懂的原因，否则返回 None"""
+    try:
+        result = _lpstat(['-p', printer_name], timeout=5)
+    except Exception:
+        return None
+    text = (result.stdout or '').lower()
+    if not any(k in text for k in ('may not exist', 'unavailable', 'host is down', 'not connected')):
+        return None
+    return get_printer_offline_reason(get_printer_uri(printer_name))
+
+
 def get_single_printer_status(printer_name, timeout=5):
     """
     获取单台打印机的在线状态（只探测这一台，不探测其他打印机）
@@ -821,6 +865,7 @@ def get_single_printer_status(printer_name, timeout=5):
         
         # 3. 使用协议级探测检查打印机是否真实在线（只探测这一台）
         online_status = 'unknown'
+        offline_reason = None
         if check_printer_online:
             try:
                 probe_result = check_printer_online(printer_uri, timeout=timeout)
@@ -842,6 +887,10 @@ def get_single_printer_status(printer_name, timeout=5):
                             logger.warning(f"打印机 {printer_name} 自愈后恢复在线：{printer_uri}")
                         else:
                             logger.warning(f"打印机 {printer_name} 已修正 URI 但仍探测失败：{printer_uri} -> {probe_result}")
+                    if online_status == 'offline':
+                        # 自愈无效时给出明确原因，避免前端只显示“离线/打印中”而看不出根因
+                        offline_reason = get_printer_offline_reason(printer_uri)
+                        logger.warning(f"打印机 {printer_name} 离线：{offline_reason}")
                 logger.debug(f"打印机 {printer_name} 在线检测：{probe_result}")
             except Exception as e:
                 logger.warning(f"打印机 {printer_name} 在线检测失败：{e}")
@@ -851,6 +900,7 @@ def get_single_printer_status(printer_name, timeout=5):
             'name': printer_name,
             'status': status,
             'online_status': online_status,
+            'offline_reason': offline_reason,
             'uri': printer_uri
         }
         
@@ -1799,11 +1849,19 @@ def monitor_job_progress(job_id, cups_job_id, printer_name):
                         processing_start_time = time.time()
                     processing_elapsed = time.time() - processing_start_time
                     progress = min(90, int(processing_elapsed))
+                    # 卡在队首却打不出来时（典型：USB 打印机断电/线松/ipp-usb 没起来），
+                    # 每 10 秒查一次 CUPS 状态，把真实原因写进任务信息，别只显示“打印中 90%”
+                    printer_hint = None
+                    if processing_elapsed >= 20 and int(processing_elapsed) % 10 == 0:
+                        printer_hint = get_cups_unreachable_reason(printer_name)
                     with print_jobs_lock:
                         if job_id in print_jobs:
                             print_jobs[job_id]['status'] = 'processing'
                             print_jobs[job_id]['progress'] = progress
-                            print_jobs[job_id]['message'] = f'打印中... ({progress}%)'
+                            if printer_hint:
+                                print_jobs[job_id]['message'] = f'打印机无响应，任务仍在队列（修好后会自动打印）：{printer_hint}'
+                            else:
+                                print_jobs[job_id]['message'] = f'打印中... ({progress}%)'
                     logger.debug(f"任务 {job_id} 正在打印，进度：{progress}%")
                 else:
                     # 排队中：重置处理计时，显示前方任务数
@@ -2020,6 +2078,7 @@ def api_printer_status(printer_name):
             'name': printer['name'],
             'status': printer['status'],
             'online_status': printer['online_status'],
+            'offline_reason': printer.get('offline_reason'),
             'uri': printer.get('uri')
         })
     except Exception as e:

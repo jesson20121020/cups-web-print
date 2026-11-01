@@ -461,6 +461,7 @@
         }
         let uploadedFile = null;
         let currentUploadXhr = null;
+        let printerOfflineNotified = false;
         let jobs = [];
         let jobsTimerId = null;
         let filesTimerId = null;
@@ -1304,7 +1305,16 @@
                                         statusDisplay = '离线';
                                     }
                                     option.textContent = `${result.name} (${statusDisplay})`;
+                                    if (result.offline_reason) {
+                                        option.title = result.offline_reason;
+                                    }
                                     console.log(`打印机 ${result.name} 状态更新：${statusDisplay}`);
+                                }
+                                // 离线原因只说一次，避免每次轮询都弹提示
+                                if (result.online_status === 'offline' && result.offline_reason && !printerOfflineNotified) {
+                                    printerOfflineNotified = true;
+                                    showToast(`打印机离线：${result.offline_reason}`, 'warning', 12000);
+                                    console.warn(`打印机离线原因：${result.offline_reason}`);
                                 }
                             } catch (e) {
                                 // 失败也立即更新为未知

@@ -1,0 +1,11 @@
+[Unit]
+Description=cups-web-print USB 打印机看门狗（USB 端口卡死时自动复位）
+Documentation=file:/usr/local/sbin/cups-usb-watchdog.sh
+After=cups.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/cups-usb-watchdog.sh
+Nice=10
+# 只在正常退出码为 0 时算成功；脚本内部异常也不会拖垮后续巡检
+SuccessExitStatus=0

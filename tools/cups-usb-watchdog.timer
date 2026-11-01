@@ -1,0 +1,11 @@
+[Unit]
+Description=每 2 分钟检查一次：USB 打印机是否掉线、打印任务是否卡在队列里
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=2min
+AccuracySec=30s
+Unit=cups-usb-watchdog.service
+
+[Install]
+WantedBy=timers.target

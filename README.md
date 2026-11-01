@@ -315,6 +315,46 @@ ipptool -t ipp://打印机 IP:631/ipp/print get-printer-attributes.test
 - 查看 CUPS 日志：`/var/log/cups/error_log`
 - 检查打印机在线状态
 
+### 问题：USB 打印机"唤醒不了"，任务一直显示打印中但不出纸
+现象：网页提示打印中（进度卡在 90%），打印机毫无反应，重新提交也一样。
+
+排查（按顺序，30 秒能定位）：
+```bash
+lpstat -o                 # 任务是否卡在队列里
+lpstat -p TS3380-IPPS     # 是否报 "may not exist or is unavailable"
+lsusb | grep -i canon     # 系统还能不能看到这台打印机
+systemctl is-active ipp-usb
+(ss -ltn || netstat -ltn) | grep -E ':600[0-9][0-9]'   # ipp-usb 端点是否在监听
+dmesg | grep -E "port5|Cannot enable|unable to enumerate"
+```
+若 `lsusb` 里没有打印机、内核日志出现 `Cannot enable. Maybe the USB cable is bad?` +
+`unable to enumerate USB device`，说明打印机 USB 掉线后 **xhci 端口卡在枚举失败状态**，
+内核不会再重试；此时 ipp-usb 起不来、`127.0.0.1:60000` 无人监听，任何打印请求都到不了
+打印机，网页上怎么点都"唤醒"不了。
+
+手动恢复（复位该 USB 端口，相当于给端口重新上电探测）：
+```bash
+# 1-5 换成 dmesg 里打印机所在的 bus-port（如 usb1-port5 → /sys/bus/usb/devices/usb1/1-0:1.0/usb1-port5）
+P=/sys/bus/usb/devices/usb1/1-0:1.0/usb1-port5
+echo 1 | sudo tee $P/disable; sleep 1; echo 0 | sudo tee $P/disable
+```
+复位后打印机立即重新枚举，ipp-usb 自动起来，卡在队列里的任务会自动接着打印
+（不需要重新提交）。若复位无效，再检查打印机电源和 USB 线（内核提示可能线缆不良）。
+
+自动恢复（推荐，需 root 定时器）：仓库 `tools/` 下提供看门狗，只在
+「有排队任务 + 没有 ipp-usb 端点 + 总线找不到打印机 + 该端口没有别的设备」四条同时
+成立时才复位端口，每 2 分钟巡检一次：
+```bash
+sudo install -m 0755 tools/cups-usb-watchdog.sh /usr/local/sbin/cups-usb-watchdog.sh
+sudo install -m 0644 tools/cups-usb-watchdog.service tools/cups-usb-watchdog.timer /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now cups-usb-watchdog.timer
+/usr/local/sbin/cups-usb-watchdog.sh --status   # 看诊断；--dry-run 只判断不动手
+tail -f /var/log/cups-usb-watchdog.log
+```
+应用侧（v1.85 起）也会把真实原因直接写出来：打印机离线时页面弹出「打印机 USB 未被
+系统识别（ipp-usb 端点 60000-60010 都没有监听）…」，卡住的任务信息也不再只显示
+"打印中 90%"，而是「打印机无响应，任务仍在队列（修好后会自动打印）：<原因>」。
+
 
 ## 许可证
 
