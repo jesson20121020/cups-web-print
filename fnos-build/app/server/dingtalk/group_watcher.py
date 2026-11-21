@@ -292,7 +292,9 @@ class GroupEventWatcher(GroupWatcher):
             except OSError:
                 continue
             joined = " ".join(parts)
-            if "listen-im" in joined and getattr(self.cfg, "dws_config_dir", "") in joined:
+            # 用 CLI 安装目录（config/keychain 的父目录）做标记，cmdline 里出现的是它
+            dws_root = os.path.dirname(getattr(self.cfg, "dws_config_dir", "") or "")
+            if "listen-im" in joined and dws_root and dws_root in joined:
                 try:
                     os.kill(pid, signal.SIGTERM)
                     LOG.info("清理残留事件流进程 %s", pid)
