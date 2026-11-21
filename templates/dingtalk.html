@@ -104,7 +104,16 @@
         </select>
         <input id="card_target_staff_id" class="field mt-2 hidden" placeholder="staffId，例如 0344694131836">
       </div>
-      <div><label class="label">用户白名单 staffId（逗号分隔）</label><input id="allow_user_ids" class="field" placeholder="只允许这些人操作"></div>
+      <div class="md:col-span-2">
+        <label class="label">允许私聊机器人的人员 staffId（逗号分隔，留空 = 不限制）</label>
+        <input id="allow_user_ids" class="field" placeholder="留空表示谁都可以私聊机器人发文件">
+        <p class="text-xs text-slate-400 mt-1">只限制「单聊发给机器人 / 群里 @机器人」这类主动操作。<b>群消息自动出卡片、卡片按钮点击都不受此限制</b>，群里任何人点「打印」都会正常出纸。</p>
+      </div>
+      <div class="md:col-span-2">
+        <label class="label">群白名单 conversationId（逗号分隔，留空 = 不启用）</label>
+        <input id="allow_group_ids" class="field" placeholder="填了某个群后，该群内 @机器人 也不受上面的人员白名单限制">
+        <p class="text-xs text-slate-400 mt-1">适合「机器人拉进家庭群，全家谁 @ 它都能用」的场景。群 ID 就在上面「群 ID」那一栏。</p>
+      </div>
       <div class="flex items-end gap-2 pb-1">
         <label class="inline-flex items-center gap-2 text-sm text-slate-700">
           <input id="group_enabled" type="checkbox" class="w-4 h-4"> 启用群监听
@@ -165,7 +174,7 @@ async function loadConfig() {
   const r = await fetch('/api/dingtalk/config').then(r => r.json());
   const c = r.config || {};
   for (const k of ['client_id', 'robot_code', 'card_template_id', 'group_name', 'group_chat_id',
-                   'group_poll_seconds', 'allow_user_ids']) {
+                   'group_poll_seconds', 'allow_user_ids', 'allow_group_ids']) {
     if (c[k] !== undefined && $(k)) $(k).value = Array.isArray(c[k]) ? c[k].join(',') : c[k];
   }
   if (c.client_secret) $('client_secret').placeholder = '已保存（' + c.client_secret + '），留空不修改';
@@ -191,6 +200,7 @@ async function save(restart) {
     group_poll_seconds: Number($('group_poll_seconds').value || 120),
     group_enabled: $('group_enabled').checked,
     allow_user_ids: $('allow_user_ids').value.split(',').map(s => s.trim()).filter(Boolean),
+    allow_group_ids: $('allow_group_ids').value.split(',').map(s => s.trim()).filter(Boolean),
     card_target_staff_id: $('card_target_mode').value === 'dm' ? $('card_target_staff_id').value.trim() : '',
     _restart: restart,
   };
