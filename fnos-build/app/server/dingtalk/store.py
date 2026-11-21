@@ -36,7 +36,7 @@ DEFAULTS = {
     "group_enabled": False,
     "group_name": "",
     "group_chat_id": "",
-    "group_mode": "poll",          # poll | relay（relay 需要宿主机中继）
+    "group_mode": "event",          # poll | relay（relay 需要宿主机中继）
     "group_poll_seconds": 120,
     "group_fetch_limit": 30,
     "group_skip_history": True,
