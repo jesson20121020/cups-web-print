@@ -259,7 +259,7 @@ final_status="submitted"
 final_msg=""
 if [ "$WAIT" -gt 0 ]; then
     deadline=$(( $(date +%s) + WAIT ))
-    last_line=""
+    last_key=""
     while [ "$(date +%s)" -lt "$deadline" ]; do
         jobs_json="$(api_get /api/jobs)"
         line="$(printf '%s' "$jobs_json" | python3 -c '
@@ -272,9 +272,12 @@ for j in (json.load(sys.stdin).get("jobs") or []):
 ' "$job_id")"
         if [ -n "$line" ]; then
             st="${line%%|*}"; rest="${line#*|}"; prog="${rest%%|*}"; msg="${rest#*|}"
-            if [ "$line" != "$last_line" ]; then
+            # 进度按 25% 一档输出，避免刷屏（状态一变立刻输出）
+            skin="${prog%%.*}"; [ -n "$skin" ] || skin=0
+            key="$st:$((skin / 25))"
+            if [ "$key" != "$last_key" ]; then
                 echo "   … $st ${prog}% ${msg}"
-                last_line="$line"
+                last_key="$key"
             fi
             case "$st" in
                 completed|cancelled|failed|timeout|error)

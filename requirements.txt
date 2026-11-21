@@ -6,3 +6,7 @@ Werkzeug>=3.0.1
 
 # 图片转 PDF（无损，JPEG/PNG/GIF/BMP/TIFF 直接嵌入 PDF 流）
 img2pdf>=0.1.0
+
+# 钉钉打印集成（机器人 Stream / 卡片 / 群消息）
+dingtalk-stream>=0.24.0
+requests>=2.31.0

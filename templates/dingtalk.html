@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>钉钉打印 - Web打印服务</title>
+  <link rel="icon" href="static/favicon.png" type="image/png">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background: #f8fafc; }
+    .card { background: #fff; border-radius: 14px; box-shadow: 0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.1); }
+    .label { font-size: 13px; color: #475569; margin-bottom: 4px; display: block; }
+    .field { width: 100%; border: 1px solid #e2e8f0; border-radius: 10px; padding: 9px 12px; font-size: 14px; outline: none; }
+    .field:focus { border-color: #f59e0b; box-shadow: 0 0 0 3px rgba(245,158,11,.12); }
+    .btn { border-radius: 10px; padding: 9px 16px; font-size: 14px; font-weight: 600; }
+    .btn-primary { background: #f59e0b; color: #fff; }
+    .btn-primary:hover { background: #d97706; }
+    .btn-ghost { background: #fff; border: 1px solid #e2e8f0; color: #334155; }
+    .btn-ghost:hover { background: #f8fafc; }
+    .pill { font-size: 12px; padding: 2px 10px; border-radius: 999px; }
+    .step { font-size: 12px; color: #94a3b8; letter-spacing: .08em; }
+  </style>
+</head>
+<body class="min-h-screen">
+<div class="max-w-4xl mx-auto px-4 py-8">
+
+  <div class="flex items-center justify-between mb-6">
+    <div>
+      <h1 class="text-2xl font-bold text-slate-800">钉钉打印集成</h1>
+      <p class="text-sm text-slate-500 mt-1">群里发作业，手机上点一下就打印 — 配置一次即可长期使用</p>
+    </div>
+    <a href="/" class="btn btn-ghost">← 返回打印</a>
+  </div>
+
+  <!-- 状态栏 -->
+  <div class="card p-5 mb-5">
+    <div class="flex flex-wrap items-center gap-x-8 gap-y-3 text-sm">
+      <div><span class="text-slate-500">服务</span> <span id="st-service" class="pill bg-slate-100 text-slate-600 ml-1">…</span></div>
+      <div><span class="text-slate-500">CLI</span> <span id="st-dws" class="pill bg-slate-100 text-slate-600 ml-1">…</span></div>
+      <div><span class="text-slate-500">授权</span> <span id="st-auth" class="pill bg-slate-100 text-slate-600 ml-1">…</span></div>
+      <div><span class="text-slate-500">群监听</span> <span id="st-group" class="pill bg-slate-100 text-slate-600 ml-1">…</span></div>
+      <button class="btn btn-ghost ml-auto" onclick="refresh()">刷新</button>
+    </div>
+    <div id="st-error" class="mt-3 text-sm text-red-600 hidden"></div>
+  </div>
+
+  <!-- 第一步：CLI -->
+  <div class="card p-5 mb-5">
+    <div class="step">STEP 1</div>
+    <h2 class="text-lg font-semibold text-slate-800 mt-1">安装 CLI 并授权</h2>
+    <p class="text-sm text-slate-500 mt-1">用钉钉官方命令行工具（dws）以你的账号读取群消息。只需授权一次。</p>
+
+    <div class="flex flex-wrap gap-2 mt-4">
+      <button class="btn btn-ghost" onclick="installDws()">下载 / 更新 CLI</button>
+      <button class="btn btn-primary" onclick="startLogin()">扫码授权</button>
+    </div>
+
+    <div id="login-box" class="mt-4 hidden rounded-xl bg-amber-50 border border-amber-200 p-4">
+      <div class="text-sm text-amber-800">在手机钉钉里打开下面的链接并确认（授权码 <b id="login-code" class="font-mono"></b>）</div>
+      <a id="login-url" href="#" target="_blank" class="block mt-2 text-sm text-blue-600 break-all underline"></a>
+      <div id="login-state" class="text-xs text-amber-700 mt-2">等待授权…</div>
+    </div>
+  </div>
+
+  <!-- 第二步：应用配置 -->
+  <div class="card p-5 mb-5">
+    <div class="step">STEP 2</div>
+    <h2 class="text-lg font-semibold text-slate-800 mt-1">钉钉应用凭证</h2>
+    <p class="text-sm text-slate-500 mt-1">在钉钉开放平台创建「企业内部应用」并开启机器人（Stream 模式），把 AppKey / AppSecret 填进来。</p>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+      <div><label class="label">AppKey（ClientId）</label><input id="client_id" class="field" placeholder="dingxxxxxxx"></div>
+      <div><label class="label">AppSecret</label><input id="client_secret" class="field" type="password" placeholder="留空表示不修改"></div>
+      <div><label class="label">RobotCode</label><input id="robot_code" class="field" placeholder="一般与 AppKey 相同"></div>
+      <div><label class="label">卡片模板 ID</label><input id="card_template_id" class="field" placeholder="xxxx.schema"></div>
+    </div>
+  </div>
+
+  <!-- 第三步：群监听 -->
+  <div class="card p-5 mb-5">
+    <div class="step">STEP 3</div>
+    <h2 class="text-lg font-semibold text-slate-800 mt-1">群监听</h2>
+    <p class="text-sm text-slate-500 mt-1">指定要监听的群，群里有新图片/文件就自动生成打印卡片。</p>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+      <div>
+        <label class="label">群名称</label>
+        <div class="flex gap-2">
+          <input id="group_name" class="field" placeholder="例如：木耳作业">
+          <button class="btn btn-ghost whitespace-nowrap" onclick="loadGroups()">读取群列表</button>
+        </div>
+        <select id="group_pick" class="field mt-2 hidden" onchange="pickGroup()"></select>
+      </div>
+      <div><label class="label">群 ID（自动带出，可手填）</label><input id="group_chat_id" class="field" placeholder="cid..."></div>
+      <div>
+        <label class="label">轮询间隔（秒，兜底用）</label>
+        <input id="group_poll_seconds" class="field" type="number" min="30" step="30">
+      </div>
+      <div>
+        <label class="label">卡片发到哪里</label>
+        <select id="card_target_mode" class="field">
+          <option value="group">发到群里（家人可见）</option>
+          <option value="dm">只发给我（填 staffId）</option>
+        </select>
+        <input id="card_target_staff_id" class="field mt-2 hidden" placeholder="staffId，例如 0344694131836">
+      </div>
+      <div><label class="label">用户白名单 staffId（逗号分隔）</label><input id="allow_user_ids" class="field" placeholder="只允许这些人操作"></div>
+      <div class="flex items-end gap-2 pb-1">
+        <label class="inline-flex items-center gap-2 text-sm text-slate-700">
+          <input id="group_enabled" type="checkbox" class="w-4 h-4"> 启用群监听
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <div class="flex flex-wrap gap-2 mb-8">
+    <button class="btn btn-primary" onclick="save(true)">保存并重启服务</button>
+    <button class="btn btn-ghost" onclick="save(false)">仅保存</button>
+    <button class="btn btn-ghost" onclick="testCard()">发一张测试卡片</button>
+  </div>
+
+  <!-- 运行日志 -->
+  <div class="card p-5">
+    <h2 class="text-lg font-semibold text-slate-800">运行日志</h2>
+    <div id="events" class="mt-3 text-sm text-slate-600 space-y-1 max-h-64 overflow-auto font-mono"></div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let loginTimer = null;
+
+function pill(el, text, tone) {
+  el.textContent = text;
+  el.className = 'pill ml-1 ' + ({
+    ok: 'bg-green-100 text-green-700',
+    warn: 'bg-amber-100 text-amber-700',
+    bad: 'bg-red-100 text-red-700',
+    idle: 'bg-slate-100 text-slate-600',
+  }[tone] || 'bg-slate-100 text-slate-600');
+}
+
+async function refresh() {
+  const r = await fetch('/api/dingtalk/status').then(r => r.json());
+  pill($('st-service'), r.state === 'running' ? '运行中' : (r.state === 'error' ? '异常' : '已停止'),
+       r.state === 'running' ? 'ok' : (r.state === 'error' ? 'bad' : 'idle'));
+  pill($('st-dws'), r.dws_installed ? (r.dws_version || '已安装') : '未安装', r.dws_installed ? 'ok' : 'warn');
+  pill($('st-auth'), r.authenticated ? (r.user_name || '已授权') : '未授权', r.authenticated ? 'ok' : 'warn');
+  pill($('st-group'), r.group_enabled ? (r.group_name || '已启用') : '未启用', r.group_enabled ? 'ok' : 'idle');
+
+  if (r.last_error) {
+    $('st-error').textContent = '错误：' + r.last_error;
+    $('st-error').classList.remove('hidden');
+  } else {
+    $('st-error').classList.add('hidden');
+  }
+
+  $('events').innerHTML = (r.events || []).slice().reverse().map(e => {
+    const color = e.kind === 'error' ? 'text-red-600' : 'text-slate-600';
+    return `<div class="${color}">[${e.t}] ${e.text}</div>`;
+  }).join('') || '<div class="text-slate-400">暂无日志</div>';
+}
+
+async function loadConfig() {
+  const r = await fetch('/api/dingtalk/config').then(r => r.json());
+  const c = r.config || {};
+  for (const k of ['client_id', 'robot_code', 'card_template_id', 'group_name', 'group_chat_id',
+                   'group_poll_seconds', 'allow_user_ids']) {
+    if (c[k] !== undefined && $(k)) $(k).value = Array.isArray(c[k]) ? c[k].join(',') : c[k];
+  }
+  if (c.client_secret) $('client_secret').placeholder = '已保存（' + c.client_secret + '），留空不修改';
+  $('group_enabled').checked = !!c.group_enabled;
+  const dm = !!c.card_target_staff_id;
+  $('card_target_mode').value = dm ? 'dm' : 'group';
+  $('card_target_staff_id').value = c.card_target_staff_id || '';
+  toggleTarget();
+}
+
+function toggleTarget() {
+  $('card_target_staff_id').classList.toggle('hidden', $('card_target_mode').value !== 'dm');
+}
+
+async function save(restart) {
+  const payload = {
+    client_id: $('client_id').value.trim(),
+    client_secret: $('client_secret').value.trim(),
+    robot_code: $('robot_code').value.trim(),
+    card_template_id: $('card_template_id').value.trim(),
+    group_name: $('group_name').value.trim(),
+    group_chat_id: $('group_chat_id').value.trim(),
+    group_poll_seconds: Number($('group_poll_seconds').value || 120),
+    group_enabled: $('group_enabled').checked,
+    allow_user_ids: $('allow_user_ids').value.split(',').map(s => s.trim()).filter(Boolean),
+    card_target_staff_id: $('card_target_mode').value === 'dm' ? $('card_target_staff_id').value.trim() : '',
+    _restart: restart,
+  };
+  const r = await fetch('/api/dingtalk/config', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
+  }).then(r => r.json());
+  if (!r.ok) return alert(r.error || '保存失败');
+  await refresh();
+  alert(restart ? '已保存并重启服务' : '已保存');
+}
+
+async function installDws() {
+  const btn = event.target; btn.disabled = true; btn.textContent = '下载中…';
+  const r = await fetch('/api/dingtalk/dws/install', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'
+  }).then(r => r.json());
+  btn.disabled = false; btn.textContent = '下载 / 更新 CLI';
+  if (!r.ok) return alert('安装失败：' + r.error);
+  alert('已安装：' + (r.version || ''));
+  refresh();
+}
+
+async function startLogin() {
+  const r = await fetch('/api/dingtalk/login/start', {method: 'POST'}).then(r => r.json());
+  if (!r.ok) return alert('启动授权失败：' + r.error);
+  $('login-box').classList.remove('hidden');
+  $('login-code').textContent = r.code || '';
+  $('login-url').textContent = r.url || '';
+  $('login-url').href = r.url || '#';
+  $('login-state').textContent = '等待授权…';
+  clearInterval(loginTimer);
+  loginTimer = setInterval(pollLogin, 3000);
+}
+
+async function pollLogin() {
+  const r = await fetch('/api/dingtalk/login/poll').then(r => r.json());
+  if (r.authenticated) {
+    clearInterval(loginTimer);
+    $('login-state').textContent = '已授权：' + (r.user_name || '') + ' / ' + (r.corp_name || '');
+    $('login-state').className = 'text-xs text-green-700 mt-2';
+    refresh();
+  } else if (!r.pending) {
+    clearInterval(loginTimer);
+    $('login-state').textContent = '未完成授权：' + (r.message || '授权码可能已过期，请重新扫码');
+  }
+}
+
+async function loadGroups() {
+  const r = await fetch('/api/dingtalk/groups').then(r => r.json());
+  if (!r.ok) return alert('读取失败：' + r.error);
+  const sel = $('group_pick');
+  sel.innerHTML = '<option value="">选择群…</option>' + r.groups.map(g =>
+    `<option value="${g.id}" data-name="${g.name}">${g.name}（${g.members} 人）</option>`).join('');
+  sel.classList.remove('hidden');
+}
+
+function pickGroup() {
+  const sel = $('group_pick');
+  const opt = sel.selectedOptions[0];
+  if (!opt || !opt.value) return;
+  $('group_chat_id').value = opt.value;
+  $('group_name').value = opt.dataset.name || '';
+}
+
+async function testCard() {
+  const r = await fetch('/api/dingtalk/test-card', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({staff_id: $('card_target_staff_id').value.trim()})
+  }).then(r => r.json());
+  alert(r.ok ? '已发送，看钉钉里有没有卡片' : ('失败：' + r.error));
+}
+
+$('card_target_mode').addEventListener('change', toggleTarget);
+loadConfig(); refresh();
+setInterval(refresh, 10000);
+</script>
+</body>
+</html>

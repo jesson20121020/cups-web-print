@@ -690,3 +690,37 @@ This software is provided "as is" without any warranty. The author assumes no re
 
 ---
 
+## 钉钉打印集成
+
+装好应用后打开 **`http://<NAS>:5000/dingtalk`**，三步配置即可：
+
+1. **安装 CLI + 扫码授权** —— 点「下载 / 更新 CLI」（官方 dws，约 62MB），再点「扫码授权」，手机钉钉确认。
+2. **钉钉应用凭证** —— 开放平台建「企业内部应用」→ 开启机器人（Stream 模式）→ 填 AppKey / AppSecret / RobotCode / 卡片模板 ID。
+3. **群监听** —— 点「读取群列表」选群，决定卡片发群里还是单聊，保存并重启服务。
+
+之后群里有人发图片/文件，约 3 秒会自动出一张打印卡片，点「打印」才出纸。
+
+### 架构
+
+```
+cups-web-print 进程（cups-web-print 用户）
+├── Flask：打印页 + /dingtalk 配置页
+├── 钉钉机器人（Stream 长连接，卡片按钮回调 → 打印）
+└── dws event +listen-im（子进程，群消息实时推送）
+      └── 新消息 → 下载资源 → 内容去重 → 出打印卡片
+```
+
+- 状态：`GET /api/dingtalk/status`；配置：`GET/POST /api/dingtalk/config`
+- 数据目录：`$TRIM_PKGVAR/dingtalk-data`（飞牛上是 `/vol1/@appdata/cups-web-print/dingtalk-data`），含 CLI 二进制、登录态、已处理消息记录
+- 登录态有效期约 30 天；过期后页面会显示「未授权」，点一次「扫码授权」即可
+- 应用/机器重启后，Flask 启动时会自动按配置拉起机器人与群监听
+
+### 常见问题
+
+| 现象 | 原因 |
+| --- | --- |
+| 配置页显示 CLI 已安装但未授权 | 登录态过期或换过数据目录，重新扫码 |
+| 日志 `bus child reported startup failure` | 在容器里跑 `dws event` 会这样；本集成跑在应用进程（宿主机）里，正常 |
+| 群里发图不出卡片 | 看 `/dingtalk` 的运行日志：`事件触发` 有没有出现 |
+| 卡片不出现但日志说已投放 | 群是外部群时卡片可能被限制，改「只发给我」并填 staffId |
+

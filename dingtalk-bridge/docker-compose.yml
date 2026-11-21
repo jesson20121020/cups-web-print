@@ -1,0 +1,23 @@
+services:
+  dingtalk-print-bridge:
+    build: .
+    image: dingtalk-print-bridge:local
+    container_name: dingtalk-print-bridge
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "18099:8099"
+    environment:
+      DWS_CONFIG_DIR: /dws/config
+      DWS_KEYCHAIN_DIR: /dws/keychain
+      DWS_BIN: /usr/local/bin/dws
+    volumes:
+      - ./data/inbox:/data/inbox
+      - ../dws/dws:/usr/local/bin/dws:ro
+      - ../dws/config:/dws/config
+      - ../dws/keychain:/dws/keychain
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

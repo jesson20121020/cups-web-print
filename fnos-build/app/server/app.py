@@ -2945,6 +2945,15 @@ def api_ink_reset(printer_name):
         logger.error(f"重置墨盒估算失败: {e}")
         return jsonify({'error': str(e)}), 500
 
+# ---------------- 钉钉打印集成 ----------------
+try:
+    from dingtalk import routes as dingtalk_routes
+    dingtalk_routes.init(app)
+    logger.info("钉钉打印集成已加载：/dingtalk")
+except Exception as _e:  # 依赖缺失时不影响打印主功能
+    logger.warning("钉钉打印集成未启用：%s", _e)
+
+
 if __name__ == '__main__':
     print("=" * 60)
     print("Web 打印服务启动中...")

@@ -42,3 +42,14 @@ fnos-build/*.fpk
 *.tmp
 *.swp
 .DS_Store
+
+# ---- 钉钉集成：运行时数据与凭证（严禁入库） ----
+dingtalk-data/
+dws/
+dingtalk-bridge/.venv/
+dingtalk-bridge/.env
+dingtalk-bridge/data/
+dingtalk-bridge/.probe/
+dingtalk-bridge/.docker-config/
+dingtalk-bridge/tools/.cdp_tab
+*.fpk
