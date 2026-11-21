@@ -20,7 +20,9 @@ from . import card_spec
 from .card_api import CardAPI
 from .store import Settings as Config
 from .dingtalk_api import DingTalkAPI
+from .media import MediaClient
 from .print_client import PrintClient, PrintError
+from .sheet import build_sheet
 
 LOG = logging.getLogger("bridge.bot")
 
@@ -28,6 +30,16 @@ IMAGE_EXT = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
 DOC_EXT = {".pdf", ".txt", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".rtf", ".svg"}
 
 PAPERS = ["A4", "A3", "A5", "A6", "B4", "B5", "4x6", "5x7", "3.5x5", "8x10"]
+
+# 卡片顶部标题（模板里 ${title} 是变量，所以标题由后端决定）
+TITLE = "书房打印机"
+
+
+def _bar_html(pct: int, width: int = 20) -> str:
+    """卡片里没有真正的进度条组件，用方块字符画一条（文本一定会被渲染）。"""
+    pct = max(0, min(100, int(pct or 0)))
+    filled = int(round(pct / 100 * width))
+    return "█" * filled + "░" * (width - filled) + f"  **{pct}%**"
 
 HELP = (
     "**打印机器人用法**\n\n"
@@ -84,6 +96,7 @@ class Pending:
         self.card_id = ""         # 互动卡片 outTrackId
         self.state = "pending"    # pending | printing | done | cancelled | failed
         self.progress = 0
+        self.sheet_sent = False   # 预览长图是否已发（每批只发一次）
         self.curr_file = ""
         self.elapsed = 0
         self.error = ""
@@ -104,6 +117,7 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
         self._seen: dict[str, float] = {}     # msgId 去重，防钉钉重投导致重复打印
         self._last_hint: dict[str, float] = {}  # 引导语限流（按会话）
         self.card = CardAPI(api)
+        self.media = MediaClient(cfg.client_id, cfg.client_secret, cfg.robot_code)
         self.card_template_id = cfg.card_template_id
         self.card_disabled = False
         self.by_card: dict[str, Pending] = {}  # outTrackId -> Pending
@@ -133,41 +147,52 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
             LOG.warning("互动卡片不可用，退回文字卡片：%s", exc)
 
     def _card_view(self, pending: Pending) -> dict:
-        """把当前状态渲染成卡片字段：标题 / 小字 / 正文 / 进度 / 两个按钮文案。"""
+        """把当前状态渲染成卡片字段。
+
+        卡片模板里能用的变量（模板在卡片平台，发布后不可改）：
+          title/meta/content/progress/btnPrint/btnCancel
+        图片和真进度条只能靠模板组件，模板里没有 → 进度条用字符条画在 content 里，
+        预览图另外发一条图片消息（见 _send_preview）。
+        """
         self._apply_params(pending, {})
         files = [a.name for a in pending.attachments]
         n = len(files)
         params = self._params_line(pending)
         merged = n > 1 and all(a.kind == "image" for a in pending.attachments)
+        bar = _bar_html
+        first = (pending.curr_file or (files[0] if files else ""))[:24]
 
         if pending.state == "pending":
-            title = "待确认打印"
-            meta = f"{n} 个文件 · 确认后开始打印"
-            body = "\n".join(files[:5]) + (f"\n等共 {n} 个文件" if n > 5 else "")
-            body += "\n\n" + params
+            meta = f"待确认打印 · {n} 个文件"
+            body = params
             if merged:
-                body += "\n多张图片会合并成一个 PDF"
+                body += f"\n{n} 张图片会合并成一个 PDF"
             if pending.error:
                 meta = "打印机当前离线"
                 body += "\n\n" + pending.error
+            else:
+                body += "\n\n点「确认打印」才会出纸"
             progress, btns = 0, ("🖨 打印", "取消")
         elif pending.state == "printing":
-            title = "正在打印…"
-            pct = pending.progress or 0
-            meta = f"{pct}% · {(pending.curr_file or (files[0] if files else ''))[:28]}"
-            body = params
-            progress, btns = pending.progress, ("打印中…", "取消")
+            pct = int(pending.progress or 0)
+            meta = f"正在打印 · {pct}%"
+            body = bar(pct) + f"\n**{first}**\n{params}"
+            progress, btns = pct, ("打印中…", "取消")
         else:
             ok = pending.state == "done"
-            title = "已打印完成" if ok else ("打印失败" if pending.state == "failed" else "已取消")
-            meta = f"用时 {pending.elapsed} 秒" if ok else (pending.error or "文件未打印")
-            body = ("\n".join(files[:5]) + "\n\n" + params) if ok else params
             if ok:
-                body += "\n已出纸，记得去取"
+                meta = f"已打印完成 · 用时 {pending.elapsed} 秒"
+                body = bar(100) + f"\n{params}\n\n已出纸，记得去取"
+            elif pending.state == "failed":
+                meta = "打印失败"
+                body = (pending.error or "文件没打出来") + "\n\n" + params
+            else:
+                meta = "已取消"
+                body = "这些文件不会打印"
             progress = 100 if ok else 0
             btns = ("已打印" if ok else "关闭", "关闭")
 
-        return {"title": title, "meta": meta, "content": body, "progress": progress,
+        return {"title": TITLE, "meta": meta, "content": body, "progress": progress,
                 "btnPrint": btns[0], "btnCancel": btns[1]}
 
     async def _send_card(self, pending: Pending) -> bool:
@@ -188,6 +213,33 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
         except Exception as exc:
             LOG.warning("发互动卡片失败，退回文字：%s", exc)
             return False
+
+    async def _send_preview(self, pending: Pending) -> None:
+        """预览图走「图片消息」：卡片模板里没有图片组件，markdown 也不渲染图片。"""
+        if not getattr(self.cfg, "preview_sheet", True) or pending.sheet_sent:
+            return
+        if not pending.attachments:
+            return
+        pending.sheet_sent = True
+        path = os.path.join(self.cfg.inbox_dir, f"sheet_{pending.id}.png")
+        try:
+            ok = await asyncio.to_thread(build_sheet, pending.attachments, path)
+            if not ok:
+                return
+            mid = await asyncio.to_thread(self.media.upload_image, path)
+            if pending.conversation_type == "2":
+                await asyncio.to_thread(self.media.send_image, mid,
+                                        open_conversation_id=pending.conversation_id)
+            else:
+                await asyncio.to_thread(self.media.send_image, mid,
+                                        staff_ids=[pending.staff_id])
+        except Exception as exc:
+            LOG.warning("预览图没发出去：%s", exc)
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
     # ------------------------------------------------------------------ 入口
     async def process(self, callback: dingtalk_stream.CallbackMessage):
@@ -322,6 +374,9 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
             return
         if await self._send_card(pending):
             LOG.info("已发出互动卡片（含确认/取消按钮）")
+            task = asyncio.create_task(self._send_preview(pending))
+            self._bg.add(task)
+            task.add_done_callback(self._bg.discard)
         else:
             await self._reply(data, self._card(pending))
         self._gc()

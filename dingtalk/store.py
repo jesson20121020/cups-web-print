@@ -41,6 +41,7 @@ DEFAULTS = {
     "group_fetch_limit": 30,
     "group_skip_history": True,
     "card_target_staff_id": "",     # 空 = 发到群里
+    "preview_sheet": True,          # 卡片外再发一张「打印预览」长图
     "event_port": 8099,
     # 行为
     "batch_window": 8,
