@@ -700,6 +700,24 @@ This software is provided "as is" without any warranty. The author assumes no re
 
 之后群里有人发图片/文件，约 3 秒会自动出一张打印卡片，点「打印」才出纸。
 
+### 卡片长什么样（v7 模板 `3c135513-…schema`）
+
+卡片结构（钉钉卡片平台「消息卡片」+ 关联应用「家里打印机」）：
+
+```
+Card
+├── Markdown   ${md}      ← 横幅图 + 状态 + 打印预览图 + 打印信息，全部走 markdown
+├── 进度条      ${progress} ← 数字型变量（0-100），必须先在「变量」面板声明
+└── ButtonGroup [${btnPrint}, ${btnCancel}]  ← 回传按钮，点一下直接出纸
+```
+
+- 模板变量：`md`(富文本) / `progress`(数字) / `btnPrint` / `btnCancel`
+- **变量必须在编辑器左侧「变量 → 新增 → 普通变量」里声明**，否则 publish 出来的
+  `widgetInfo` 里进度条会被编译成 `@toLong{undefined}`，永远显示 0%（血泪教训）。
+- 卡片发布后不可再编辑，改动要「复制」一份新模板再发布，然后把
+  `/api/dingtalk/config` 的 `card_template_id` 指过去。
+- 顶部横幅图（蓝底 + 打印机图标 + 书房打印机）地址在配置项 `card_banner_url`。
+
 ### 卡片长什么样
 
 ```

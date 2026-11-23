@@ -210,3 +210,44 @@ def _footer(attachments, shown: int) -> str:
 
 def _short(s: str, n: int) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
+
+
+def build_card_preview(attachments, out_path: str, size=(720, 420), max_pages: int = 2) -> bool:
+    """卡片内用的预览图：固定比例（默认 720x420 ≈ 1.71:1），最多并排两页。
+
+    卡片里的 Image 组件高度是固定的（dp），所以图必须是固定比例，
+    否则 centerCrop 会把内容裁掉。
+    """
+    if not attachments:
+        return False
+    W2, H2 = size
+    pages = []
+    for att in attachments[:max_pages]:
+        im = _page_image(att.path, W2, H2)
+        if im is not None:
+            pages.append(im)
+    if not pages:
+        return False
+
+    canvas = Image.new("RGB", (W2, H2), (246, 247, 249))
+    draw = ImageDraw.Draw(canvas)
+    n = len(pages)
+    pad = 14
+    gap = 12
+    cell_w = (W2 - pad * 2 - gap * (n - 1)) // n
+    cell_h = H2 - pad * 2 - 26
+    for idx, im in enumerate(pages):
+        x = pad + idx * (cell_w + gap)
+        draw.rounded_rectangle([x, pad, x + cell_w, pad + cell_h], radius=10,
+                               fill=(255, 255, 255), outline=(226, 229, 233), width=2)
+        thumb = _fit(im, cell_w - 12, cell_h - 12)
+        canvas.paste(thumb, (x + (cell_w - thumb.width) // 2,
+                            pad + (cell_h - thumb.height) // 2 + 2))
+    total = len(attachments)
+    note = f"第 1 页，共 {total} 个文件" if total > 1 else "第 1 页"
+    if total > max_pages:
+        note += f"（预览 {max_pages} 页）"
+    _draw_text(draw, (pad + 2, H2 - 22), note, 16, (140, 146, 153))
+    canvas.save(out_path, "PNG", optimize=True)
+    LOG.info("卡片预览图已生成 %s (%dx%d)", os.path.basename(out_path), W2, H2)
+    return True

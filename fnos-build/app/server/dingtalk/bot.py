@@ -22,7 +22,7 @@ from .store import Settings as Config
 from .dingtalk_api import DingTalkAPI
 from .media import MediaClient
 from .print_client import PrintClient, PrintError
-from .sheet import build_sheet
+from .sheet import build_card_preview, build_sheet
 
 LOG = logging.getLogger("bridge.bot")
 
@@ -97,6 +97,7 @@ class Pending:
         self.state = "pending"    # pending | printing | done | cancelled | failed
         self.progress = 0
         self.sheet_sent = False   # 预览长图是否已发（每批只发一次）
+        self.preview_url = ""     # 卡片内预览图的 CDN 地址（钉钉静态资源）
         self.curr_file = ""
         self.elapsed = 0
         self.error = ""
@@ -118,6 +119,7 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
         self._last_hint: dict[str, float] = {}  # 引导语限流（按会话）
         self.card = CardAPI(api)
         self.media = MediaClient(cfg.client_id, cfg.client_secret, cfg.robot_code)
+        self._placeholder = ""    # 1x1 透明图（预览图还没准备好时占位）
         self.card_template_id = cfg.card_template_id
         self.card_disabled = False
         self.by_card: dict[str, Pending] = {}  # outTrackId -> Pending
@@ -192,8 +194,31 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
             progress = 100 if ok else 0
             btns = ("已打印" if ok else "关闭", "关闭")
 
+        # v6 模板：markdown 承载「横幅图 + 状态 + 预览图 + 打印信息」，进度条绑数字型 progress
+        md = self._card_md(pending, meta, params)
         return {"title": TITLE, "meta": meta, "content": body, "progress": progress,
+                "preview": pending.preview_url or self._placeholder_url(),
+                "md": md,
                 "btnPrint": btns[0], "btnCancel": btns[1]}
+
+    def _card_md(self, pending: Pending, meta: str, params: str) -> str:
+        """卡片正文（markdown）：顶部横幅 + 状态 + 打印预览 + 参数。"""
+        banner = getattr(self.cfg, "card_banner_url", "") or ""
+        preview = pending.preview_url or self._placeholder_url()
+        lines = []
+        if banner:
+            lines += [f"![]({banner})", ""]
+        lines += [f"**{meta}**", ""]
+        if preview:
+            lines += [f"![]({preview})", ""]
+        lines += [params]
+        if pending.state == "pending":
+            lines += ["", "点「确认打印」才会出纸"]
+        elif pending.state == "done":
+            lines += ["", "已出纸，记得去取"]
+        elif pending.state == "failed":
+            lines += ["", pending.error or "文件没打出来"]
+        return "\n".join(lines)
 
     async def _send_card(self, pending: Pending) -> bool:
         if self.card_disabled or not self.card_template_id:
@@ -213,6 +238,73 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
         except Exception as exc:
             LOG.warning("发互动卡片失败，退回文字：%s", exc)
             return False
+
+    def _placeholder_url(self) -> str:
+        """1x1 透明 PNG 的 CDN 地址：预览图没准备好时占位，避免卡片出现破图。"""
+        if self._placeholder:
+            return self._placeholder
+        cache = os.path.join(os.path.dirname(self.cfg.inbox_dir), "placeholder_url.txt")
+        try:
+            with open(cache, encoding="utf-8") as fh:
+                url = fh.read().strip()
+            if url:
+                self._placeholder = url
+                return url
+        except OSError:
+            pass
+        try:
+            from PIL import Image
+            import tempfile
+            with tempfile.TemporaryDirectory() as td:
+                tmp = os.path.join(td, "placeholder.png")
+                Image.new("RGBA", (8, 8), (0, 0, 0, 0)).save(tmp)
+                mid = self.media.upload_image(tmp)
+            self._placeholder = (f"https://static.dingtalk.com/media/"
+                                 f"{mid.lstrip('@')}_8_8.png")
+            os.makedirs(os.path.dirname(cache), exist_ok=True)
+            with open(cache, "w", encoding="utf-8") as fh:
+                fh.write(self._placeholder)
+        except Exception as exc:
+            LOG.warning("占位图上传失败：%s", exc)
+        return self._placeholder
+
+    async def _refresh_preview(self, pending: Pending) -> None:
+        """后台补卡片内预览图，好了再原地更新一次卡片（不拖慢首张卡片）。"""
+        if pending.state != "pending":
+            return
+        await self._prepare_preview(pending)
+        if pending.preview_url and pending.card_id:
+            await self._say(pending)
+
+    async def _prepare_preview(self, pending: Pending) -> None:
+        """生成卡片内预览图并上传到钉钉 CDN，把地址存到 pending.preview_url。
+
+        卡片模板里图片组件的地址绑的是 ${preview}（一个字符串），
+        所以这里传的是 https://static.dingtalk.com/... 这种公开地址，
+        手机走 4G 也能显示，不依赖家里局域网。
+        """
+        if not pending.preview_url:
+            pending.preview_url = await asyncio.to_thread(self._placeholder_url)
+        if not pending.attachments or getattr(pending, "_prev_done", False):
+            return
+        pending._prev_done = True
+        path = os.path.join(self.cfg.inbox_dir, f"prev_{pending.id}.png")
+        try:
+            ok = await asyncio.to_thread(build_card_preview, pending.attachments, path)
+            if not ok:
+                return
+            mid = await asyncio.to_thread(self.media.upload_image, path)
+            # 钉钉静态资源地址必须带 _宽_高.扩展名，否则 404
+            pending.preview_url = (f"https://static.dingtalk.com/media/"
+                                   f"{mid.lstrip('@')}_720_420.png")
+            LOG.info("卡片预览图就绪 %s", pending.preview_url)
+        except Exception as exc:
+            LOG.warning("卡片预览图生成失败：%s", exc)
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
     async def _send_preview(self, pending: Pending) -> None:
         """预览图走「图片消息」：卡片模板里没有图片组件，markdown 也不渲染图片。"""
@@ -374,9 +466,12 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
             return
         if await self._send_card(pending):
             LOG.info("已发出互动卡片（含确认/取消按钮）")
-            task = asyncio.create_task(self._send_preview(pending))
+            task = asyncio.create_task(self._refresh_preview(pending))
             self._bg.add(task)
             task.add_done_callback(self._bg.discard)
+            task2 = asyncio.create_task(self._send_preview(pending))
+            self._bg.add(task2)
+            task2.add_done_callback(self._bg.discard)
         else:
             await self._reply(data, self._card(pending))
         self._gc()

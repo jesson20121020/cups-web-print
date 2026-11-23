@@ -41,6 +41,8 @@ DEFAULTS = {
     "group_fetch_limit": 30,
     "group_skip_history": True,
     "card_target_staff_id": "",     # 空 = 发到群里
+    # 卡片里 markdown 用的顶部横幅图（蓝底 + 打印机图标 + 书房打印机）
+    "card_banner_url": "https://static.dingtalk.com/media/lALPM3L6nhX7sLXM8M0C7g_750_240.png",
     "preview_sheet": True,          # 卡片外再发一张「打印预览」长图
     "event_port": 8099,
     # 行为
