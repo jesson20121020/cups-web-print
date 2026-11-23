@@ -22,7 +22,7 @@ from .store import Settings as Config
 from .dingtalk_api import DingTalkAPI
 from .media import MediaClient
 from .print_client import PrintClient, PrintError
-from .sheet import build_card_preview, build_sheet
+from .sheet import build_card_preview, build_sheet, count_pages
 
 LOG = logging.getLogger("bridge.bot")
 
@@ -98,6 +98,7 @@ class Pending:
         self.progress = 0
         self.sheet_sent = False   # 预览长图是否已发（每批只发一次）
         self.preview_url = ""     # 卡片内预览图的 CDN 地址（钉钉静态资源）
+        self.pages_total = 0      # 总页数（PDF 用 pdfinfo 统计）
         self.curr_file = ""
         self.elapsed = 0
         self.error = ""
@@ -209,7 +210,10 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
         if banner:
             lines += [f"![]({banner})", ""]
         indent = "\u3000"   # 全角空格 ≈ 12px，markdown 无 padding，用它和进度条/按钮对齐
-        lines += [f"{indent}**{meta}**", ""]
+        head = meta
+        if pending.pages_total > 1 and "共" not in meta:
+            head = f"{meta} · 共 {pending.pages_total} 页"
+        lines += [f"{indent}**{head}**", ""]
         if preview:
             lines += [f"![]({preview})", ""]
         lines += [indent + params.replace("\n", "\n" + indent)]
@@ -462,9 +466,25 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
         return out
 
     async def _flush_later(self, pending: Pending, data):
-        await asyncio.sleep(self.cfg.batch_window)
+        # 防抖而不是死等：最后一个附件到达后静默 1.5s 就出卡片；
+        # 最多等 batch_window 秒（连发多张图仍会合并成一批）
+        window = float(self.cfg.batch_window or 8)
+        quiet = min(1.5, window)
+        deadline = time.time() + window
+        last_n, last_change = len(pending.attachments), time.time()
+        while time.time() < deadline:
+            await asyncio.sleep(0.3)
+            n = len(pending.attachments)
+            if n != last_n:
+                last_n, last_change = n, time.time()
+            elif time.time() - last_change >= quiet:
+                break
         if not pending.attachments:
             return
+        try:
+            pending.pages_total = await asyncio.to_thread(count_pages, pending.attachments)
+        except Exception as exc:
+            LOG.warning("统计页数失败：%s", exc)
         if await self._send_card(pending):
             LOG.info("已发出互动卡片（含确认/取消按钮）")
             task = asyncio.create_task(self._refresh_preview(pending))

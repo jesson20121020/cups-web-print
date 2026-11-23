@@ -19,6 +19,7 @@
 import io
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -99,6 +100,73 @@ def _draw_text(draw, xy, text: str, size: int, fill, bold: bool = False) -> int:
             x += draw.textlength(run, font=f)
         run, run_ascii = ch, cur
     return int(x)
+
+
+def _pdf_page_images(path: str, max_pages: int) -> list:
+    """取 PDF 的前 max_pages 页，返回 PIL 图列表。"""
+    tmp = tempfile.mkdtemp(prefix="sheetpdf-")
+    try:
+        out = os.path.join(tmp, "p")
+        subprocess.run(["pdftoppm", "-png", "-r", "110", "-f", "1", "-l", str(max_pages), path, out],
+                       capture_output=True, timeout=90)
+        imgs = []
+        for name in sorted(os.listdir(tmp)):
+            if name.endswith(".png"):
+                imgs.append(Image.open(os.path.join(tmp, name)).convert("RGB"))
+        return imgs
+    except Exception as exc:
+        LOG.warning("PDF 取页失败 %s: %s", os.path.basename(path), exc)
+        return []
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def pdf_page_count(path: str) -> int:
+    """PDF 总页数（pdfinfo），拿不到返回 0。"""
+    try:
+        out = subprocess.run(["pdfinfo", path], capture_output=True, text=True, timeout=20).stdout
+        m = re.search(r"^Pages:\s+(\d+)", out, re.M)
+        return int(m.group(1)) if m else 0
+    except Exception:
+        return 0
+
+
+def count_pages(attachments) -> int:
+    """快速统计总页数（PDF 用 pdfinfo，图片算 1 页），不渲染，毫秒级。"""
+    total = 0
+    for att in attachments:
+        ext = os.path.splitext(getattr(att, "path", ""))[1].lower()
+        if ext == ".pdf":
+            total += pdf_page_count(att.path) or 1
+        else:
+            total += 1
+    return total
+
+
+def collect_pages(attachments, max_pages: int = 2):
+    """收集预览用的前几页图，同时统计总页数。
+
+    返回值：(imgs, total_pages)
+      - 图片文件：一张算 1 页
+      - PDF：用 pdfinfo 取总页数，并渲染前 max_pages 页
+    """
+    imgs, total = [], 0
+    for att in attachments:
+        ext = os.path.splitext(getattr(att, "path", ""))[1].lower()
+        if ext == ".pdf":
+            n = pdf_page_count(att.path) or 1
+            total += n
+            if len(imgs) < max_pages:
+                imgs.extend(_pdf_page_images(att.path, max_pages - len(imgs)))
+        elif ext in IMAGE_EXT:
+            total += 1
+            if len(imgs) < max_pages:
+                im = _page_image(att.path, 1200, 1200)
+                if im is not None:
+                    imgs.append(im)
+        else:
+            total += 1
+    return imgs, total
 
 
 def _page_image(path: str, max_w: int, max_h: int) -> Image.Image | None:
@@ -221,11 +289,7 @@ def build_card_preview(attachments, out_path: str, size=(720, 420), max_pages: i
     if not attachments:
         return False
     W2, H2 = size
-    pages = []
-    for att in attachments[:max_pages]:
-        im = _page_image(att.path, W2, H2)
-        if im is not None:
-            pages.append(im)
+    pages, total_pages = collect_pages(attachments, max_pages)
     if not pages:
         return False
 
@@ -246,9 +310,13 @@ def build_card_preview(attachments, out_path: str, size=(720, 420), max_pages: i
         canvas.paste(thumb, (x + (cell_w - thumb.width) // 2,
                             pad + (cell_h - thumb.height) // 2 + 2))
     total = len(attachments)
-    note = f"第 1 页，共 {total} 个文件" if total > 1 else "第 1 页"
-    if total > max_pages:
-        note += f"（预览 {max_pages} 页）"
+    if total_pages > 1:
+        note = f"共 {total_pages} 页" + (f"，预览前 {len(pages)} 页" if len(pages) < total_pages else "")
+    elif total > 1:
+        note = f"共 {total} 个文件"
+    else:
+        note = "第 1 页"
+
     _draw_text(draw, (pad + 2, H2 - 22), note, 16, (140, 146, 153))
     canvas.save(out_path, "PNG", optimize=True)
     LOG.info("卡片预览图已生成 %s (%dx%d)", os.path.basename(out_path), W2, H2)
