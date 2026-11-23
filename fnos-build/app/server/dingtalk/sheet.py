@@ -229,10 +229,12 @@ def build_card_preview(attachments, out_path: str, size=(720, 420), max_pages: i
     if not pages:
         return False
 
-    canvas = Image.new("RGB", (W2, H2), (246, 247, 249))
+    canvas = Image.new("RGB", (W2, H2), (255, 255, 255))
     draw = ImageDraw.Draw(canvas)
     n = len(pages)
-    pad = 14
+    # 左右各 24px（≈12dp @2x）白边：卡片 markdown 没有 padding，
+    # 靠图片自带边距让预览图和原生进度条/按钮左右对齐
+    pad = 24
     gap = 12
     cell_w = (W2 - pad * 2 - gap * (n - 1)) // n
     cell_h = H2 - pad * 2 - 26

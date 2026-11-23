@@ -208,16 +208,17 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
         lines = []
         if banner:
             lines += [f"![]({banner})", ""]
-        lines += [f"**{meta}**", ""]
+        indent = "\u3000"   # 全角空格 ≈ 12px，markdown 无 padding，用它和进度条/按钮对齐
+        lines += [f"{indent}**{meta}**", ""]
         if preview:
             lines += [f"![]({preview})", ""]
-        lines += [params]
+        lines += [indent + params.replace("\n", "\n" + indent)]
         if pending.state == "pending":
-            lines += ["", "点「确认打印」才会出纸"]
+            lines += ["", indent + "点「确认打印」才会出纸"]
         elif pending.state == "done":
-            lines += ["", "已出纸，记得去取"]
+            lines += ["", indent + "已出纸，记得去取"]
         elif pending.state == "failed":
-            lines += ["", pending.error or "文件没打出来"]
+            lines += ["", indent + (pending.error or "文件没打出来")]
         return "\n".join(lines)
 
     async def _send_card(self, pending: Pending) -> bool:
