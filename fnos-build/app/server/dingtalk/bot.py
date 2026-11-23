@@ -209,7 +209,9 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
         lines = []
         if banner:
             lines += [f"![]({banner})", ""]
-        indent = "\u3000"   # 全角空格 ≈ 12px，markdown 无 padding，用它和进度条/按钮对齐
+        # markdown 会吞掉行首空白（全角空格也吞），前面加零宽空格保住 15pt 的缩进，
+        # 视觉上和进度条/按钮的 12dp 边距对齐
+        indent = "\u200b\u3000"
         head = meta
         if pending.pages_total > 1 and "共" not in meta:
             head = f"{meta} · 共 {pending.pages_total} 页"
