@@ -266,6 +266,15 @@
                                 </label>
                             </div>
                         </div>
+                        <div class="md:col-span-2">
+                            <label id="compositeBlackLabel" class="flex items-start gap-3 p-3 border border-gray-300 rounded-lg hover:bg-gray-50 cursor-pointer transition">
+                                <input type="checkbox" id="compositeBlack" checked class="mt-1 w-4 h-4 text-blue-600 rounded">
+                                <span class="flex-1">
+                                    <span class="block text-sm font-medium text-gray-700">Composite black in color mode (force RGB raster)</span>
+                                    <span id="compositeBlackHint" class="block text-xs text-gray-500 mt-0.5">Color jobs send <code class="font-mono">ColorModel=RGB</code> so black text is built from CMY inks instead of the grayscale / K-only path. Ignored in monochrome mode.</span>
+                                </span>
+                            </label>
+                        </div>
                         <div>
                             <label class="block text-sm font-medium text-gray-700 mb-2">Duplex Printing</label>
                             <div class="space-y-2">
@@ -577,6 +586,23 @@
         }
 
 
+        function syncCompositeBlackStateEn() {
+            const isColor = (document.querySelector('input[name="colorMode"]:checked') || {}).value === 'color';
+            const box = document.getElementById('compositeBlack');
+            const label = document.getElementById('compositeBlackLabel');
+            const hint = document.getElementById('compositeBlackHint');
+            if (box) box.disabled = !isColor;
+            if (label) {
+                label.classList.toggle('opacity-60', !isColor);
+                label.classList.toggle('cursor-not-allowed', !isColor);
+            }
+            if (hint) {
+                hint.innerHTML = isColor
+                    ? 'Color jobs send <code class="font-mono">ColorModel=RGB</code> so black text is built from CMY inks instead of the grayscale / K-only path.'
+                    : 'Monochrome mode uses the K (black) ink only; this option has no effect.';
+            }
+        }
+
         document.addEventListener('DOMContentLoaded', () => {
             checkForUpdate();
             // 获取DOM元素
@@ -723,6 +749,12 @@
                     resetPrinterInfoTimer();
                 }, 1000);
             })();
+
+            // Composite black switch only applies to color mode
+            document.querySelectorAll('input[name="colorMode"]').forEach(r => {
+                r.addEventListener('change', () => syncCompositeBlackStateEn());
+            });
+            syncCompositeBlackStateEn();
 
             // 添加错误处理的定时器
             jobsTimerId = setInterval(() => {
@@ -1109,6 +1141,7 @@
             const copies = document.getElementById('copies');
             const pageRange = document.getElementById('pageRange');
             const mirrorPrint = document.getElementById('mirrorPrint');
+            const compositeBlack = document.getElementById('compositeBlack');
             const printScaling = document.getElementById('printScaling');
 
             if (!colorMode) {
@@ -1143,7 +1176,8 @@
                         copies: parseInt(copies.value) || 1,
                         page_range: pageRange ? pageRange.value.trim() : null,
                         mirror: mirrorPrint ? mirrorPrint.checked : false,
-                        print_scaling: printScaling ? printScaling.value : 'fit'
+                        print_scaling: printScaling ? printScaling.value : 'fit',
+                        composite_black: compositeBlack ? compositeBlack.checked : true
                     })
                 });
 

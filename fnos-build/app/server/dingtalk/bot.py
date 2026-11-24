@@ -84,6 +84,7 @@ class Pending:
         self.staff_id = staff_id
         self.attachments: list[Attachment] = []
         self.color = ""
+        self.composite_black = True   # 彩色默认：黑色由彩墨（CMY）合成（ColorModel=RGB）
         self.duplex = ""
         self.paper = ""
         self.copies = 1
@@ -593,6 +594,12 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
         elif re.search(r"彩色|color", t, re.I):
             out["color"] = "color"
 
+        # 彩色黑字的合成方式（默认彩墨合成）
+        if re.search(r"彩墨|rgb|合成黑|composite", t, re.I):
+            out["composite_black"] = True
+        elif re.search(r"黑墨优先|只用黑墨|单黑|不要彩墨", t, re.I):
+            out["composite_black"] = False
+
         if re.search(r"单面|simplex|单页", t, re.I):
             out["duplex"] = "one-sided"
         elif re.search(r"双面|duplex", t, re.I):
@@ -629,6 +636,8 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
         pending.duplex = override.get("duplex", pending.duplex or cfg.default_duplex)
         pending.paper = override.get("paper", pending.paper or cfg.default_paper)
         pending.paper_type = override.get("paper_type", pending.paper_type or cfg.default_paper_type)
+        if "composite_black" in override:
+            pending.composite_black = bool(override["composite_black"])
         if "copies" in override:
             pending.copies = override["copies"]
         if "page_range" in override:
@@ -669,6 +678,7 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
                         paper=pending.paper, paper_type=pending.paper_type,
                         copies=pending.copies, page_range=pending.page_range,
                         scaling=self.cfg.default_scaling,
+                        composite_black=pending.composite_black,
                     )
                     job_info = await self._wait_job(pending, resp["job_id"], name)
                     results.append((name, resp.get("job_id"), job_info))

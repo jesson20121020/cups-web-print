@@ -29,6 +29,9 @@
 - **纸张大小**: 办公A1-A4/照片5-10 寸等
 - **纸张材质**: 普通纸/光面照片纸等
 - **色彩模式**: 彩色/黑白打印
+- **黑色合成（彩色专用）**: 默认「彩墨合成」——彩色任务显式带上 `-o ColorModel=RGB`，
+  让黑色文字由 CMY 彩墨合成，避免驱动/PPD 落到「灰度 / K 单色」光栅路径把黑字打淡；
+  可关闭（关闭后交由打印机默认）。黑白模式不受该选项影响，恒走 K（黑墨）。
 - **双面打印**: 单面/双面（长边装订）/双面（短边装订）
 - **打印方向**: 纵向/横向
 - **打印份数**: 支持 1-99 份
@@ -393,6 +396,8 @@ A web-based print service built with Python Flask and CUPS, supporting file uplo
 - **Paper Size**: Office A1-A4 / Photo 5-10 inches, etc.
 - **Paper Type**: Plain paper / Glossy photo paper, etc.
 - **Color Mode**: Color / Black & white printing
+- **Composite black (color only)**: color jobs explicitly send `-o ColorModel=RGB` so black
+  text is built from CMY inks instead of the grayscale / K-only raster path (can be turned off)
 - **Duplex**: Single-sided / Duplex (long-edge binding) / Duplex (short-edge binding)
 - **Orientation**: Portrait / Landscape
 - **Copies**: Supports 1-99 copies

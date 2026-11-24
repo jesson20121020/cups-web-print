@@ -75,7 +75,8 @@ class PrintClient:
     # ---------- 打印 ----------
     def submit(self, server_name: str, *, printer: str = "", color: str = "color", duplex: str = "two-sided-long-edge",
                paper: str = "A4", paper_type: str = "plain", orientation: str = "portrait",
-               copies: int = 1, page_range=None, scaling: str = "fit") -> dict:
+               copies: int = 1, page_range=None, scaling: str = "fit",
+               composite_black: bool = True) -> dict:
         payload = {
             "filename": server_name,
             "printer": printer or self.resolve_printer(),
@@ -88,6 +89,8 @@ class PrintClient:
             "page_range": page_range or None,
             "mirror": False,
             "print_scaling": scaling,
+            # 彩色模式下默认让黑色由彩墨（CMY）合成：显式 ColorModel=RGB
+            "composite_black": bool(composite_black),
         }
         r = self._session.post(f"{self.base}/api/print", json=payload, timeout=300)
         data = {}
