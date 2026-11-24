@@ -210,7 +210,13 @@ console_handler.setFormatter(formatter)
 logger.addHandler(rotating_handler)
 logger.addHandler(console_handler)
 
-# 老版本遗留的 uploads/previews 迁到数据目录（覆盖安装后不再丢）
+# 升级场景：先应用一次性恢复包（restore-pending*.tar.gz），再把老版本留在
+# 安装目录里的 uploads/previews 迁过来 —— 覆盖安装/重装后历史都不丢
+try:
+    from paths import restore_pending_archive
+    restore_pending_archive(logger)
+except Exception as _exc:                  # 恢复失败不能影响启动
+    logger.warning("恢复数据包跳过：%s", _exc)
 migrate_legacy_dirs(logger)
 
 # 注册打印预览蓝图（移植自 hanxi/cups-web）

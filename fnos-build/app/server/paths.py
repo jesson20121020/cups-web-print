@@ -112,3 +112,33 @@ def migrate_legacy_dirs(log=None) -> list:
             if log:
                 log.warning("数据迁移失败 %s -> %s: %s", legacy, target, exc)
     return moved
+
+
+def restore_pending_archive(log=None) -> bool:
+    """启动时应用一次性数据恢复包（restore-pending*.tar.gz 放在数据目录里）。
+
+    用途：fnOS 覆盖安装走的是「卸载(保留数据) + 重新安装」，而老版本的用户文件
+    （uploads/previews）原本在**安装目录**里，卸载时会被一起删掉。升级前把它们
+    打成 restore-pending.tar.gz 放进数据目录，首次启动自动解回来。
+    解压后改名为 *.done 避免重复执行。
+    """
+    import glob as _glob
+    import tarfile
+
+    for path in sorted(_glob.glob(os.path.join(APP_DATA_DIR, "restore-pending*.tar.gz"))):
+        try:
+            with tarfile.open(path, "r:gz") as tf:
+                members = [m for m in tf.getmembers()
+                           if not (m.name.startswith("/") or ".." in m.name.split("/"))]
+                try:
+                    tf.extractall(APP_DATA_DIR, members=members, filter="data")   # py>=3.12
+                except TypeError:
+                    tf.extractall(APP_DATA_DIR, members=members)
+            os.replace(path, path + ".done")
+            if log:
+                log.info("已从 %s 恢复 %d 项历史数据", os.path.basename(path), len(members))
+            return True
+        except Exception as exc:
+            if log:
+                log.warning("恢复数据包失败 %s: %s", path, exc)
+    return False
