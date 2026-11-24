@@ -31,8 +31,10 @@ DOC_EXT = {".pdf", ".txt", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".
 
 PAPERS = ["A4", "A3", "A5", "A6", "B4", "B5", "4x6", "5x7", "3.5x5", "8x10"]
 
-# 卡片顶部标题（模板里 ${title} 是变量，所以标题由后端决定）
+# 卡片静态文案（v8 原生卡片：title/desc/icon 都绑到了模板变量，所以由后端传）
 TITLE = "书房打印机"
+CARD_DESC = "点一下就能打，TS3380"
+CARD_ICON = "https://static.dingtalk.com/media/lALPD0tXvHnK3dXMwMzA_192_192.png"
 
 
 def _bar_html(pct: int, width: int = 20) -> str:
@@ -149,68 +151,81 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
             self.card_disabled = True
             LOG.warning("互动卡片不可用，退回文字卡片：%s", exc)
 
-    def _card_view(self, pending: Pending) -> dict:
-        """把当前状态渲染成卡片字段。
+    def _file_detail(self, pending: Pending) -> str:
+        """卡片里「文件」那行的文案：几个文件、共几页。"""
+        n = len(pending.attachments)
+        pages = pending.pages_total or 0
+        if pages > 1:
+            return f"{n} 个文件 · 共 {pages} 页"
+        return f"{n} 个文件" if n > 1 else "1 个文件"
 
-        卡片模板里能用的变量（模板在卡片平台，发布后不可改）：
-          title/meta/content/progress/btnPrint/btnCancel
-        图片和真进度条只能靠模板组件，模板里没有 → 进度条用字符条画在 content 里，
-        预览图另外发一条图片消息（见 _send_preview）。
+    def _card_view(self, pending: Pending) -> dict:
+        """把当前状态渲染成 v8 卡片参数（模板变量与字段一一对应）。
+
+        模板变量（卡片平台 v8 模板 c7f55dd4…）：
+          title       顶部标题（静态文案）
+          desc        顶部副标题（静态文案；打印机离线时换成错误原因）
+          icon        顶部图标 URL（静态）
+          background  顶部背景图 URL
+          file_detail 「文件」那行：N 个文件 · 共 M 页
+          preview_img 打印预览图（前 2 页拼图）
+          progress    进度条 0-100
+          btnPrint    唯一的按钮文案（随状态变：打印 / 打印中(2/16) / 已打印）
         """
         self._apply_params(pending, {})
-        files = [a.name for a in pending.attachments]
-        n = len(files)
-        params = self._params_line(pending)
-        merged = n > 1 and all(a.kind == "image" for a in pending.attachments)
-        bar = _bar_html
-        first = (pending.curr_file or (files[0] if files else ""))[:24]
-
+        pages = pending.pages_total or 0
+        pct = 0
         if pending.state == "pending":
-            meta = f"待确认打印 · {n} 个文件"
-            body = params
-            if merged:
-                body += f"\n{n} 张图片会合并成一个 PDF"
-            if pending.error:
-                meta = "打印机当前离线"
-                body += "\n\n" + pending.error
-            else:
-                body += "\n\n点「确认打印」才会出纸"
-            progress, btns = 0, ("🖨 打印", "取消")
+            btn = "打印机离线" if pending.error else "打印"
         elif pending.state == "printing":
-            pct = int(pending.progress or 0)
-            meta = f"正在打印 · {pct}%"
-            body = bar(pct) + f"\n**{first}**\n{params}"
-            progress, btns = pct, ("打印中…", "取消")
-        else:
-            ok = pending.state == "done"
-            if ok:
-                meta = f"已打印完成 · 用时 {pending.elapsed} 秒"
-                body = bar(100) + f"\n{params}\n\n已出纸，记得去取"
-            elif pending.state == "failed":
-                meta = "打印失败"
-                body = (pending.error or "文件没打出来") + "\n\n" + params
+            pct = max(0, min(100, int(pending.progress or 0)))
+            if pages > 1:
+                done = max(1, min(pages, round(pct / 100 * pages)))
+                btn = f"打印中({done}/{pages})"
             else:
-                meta = "已取消"
-                body = "这些文件不会打印"
-            progress = 100 if ok else 0
-            btns = ("已打印" if ok else "关闭", "关闭")
+                btn = f"打印中 {pct}%"
+        elif pending.state == "done":
+            pct = 100
+            btn = "已打印"
+        elif pending.state == "failed":
+            btn = "打印失败"
+        else:
+            btn = "已取消"
 
-        # v6 模板：markdown 承载「横幅图 + 状态 + 预览图 + 打印信息」，进度条绑数字型 progress
-        md = self._card_md(pending, meta, params)
-        return {"title": TITLE, "meta": meta, "content": body, "progress": progress,
-                "preview": pending.preview_url or self._placeholder_url(),
-                "md": md,
-                "btnPrint": btns[0], "btnCancel": btns[1]}
+        desc = CARD_DESC
+        if pending.state == "pending" and pending.error:
+            desc = pending.error[:40]
+
+        preview = pending.preview_url or self._placeholder_url()
+        # 同时带上 v7 模板需要的字段：这样新旧模板都能渲染，切换/回滚期间不会出废卡
+        meta = f"正在打印 · {pct}%" if pending.state == "printing" else (
+            "待确认打印" if pending.state == "pending" else btn)
+        legacy = {
+            "md": self._card_md(pending, meta, self._params_line(pending)),
+            "meta": meta,
+            "content": "",
+            "preview": preview,
+            "btnCancel": "取消",
+        }
+        return {
+            "title": TITLE,
+            "desc": desc,
+            "icon": CARD_ICON,
+            "background": getattr(self.cfg, "card_header_bg_url", "") or "",
+            "file_detail": self._file_detail(pending),
+            "preview_img": preview,
+            "progress": pct,
+            "btnPrint": btn,
+            **legacy,
+        }
 
     def _card_md(self, pending: Pending, meta: str, params: str) -> str:
-        """卡片正文（markdown）：顶部横幅 + 状态 + 打印预览 + 参数。"""
+        """v7 模板兼容用的 markdown（v8 原生卡片不读它，留着方便回滚/降级）。"""
         banner = getattr(self.cfg, "card_banner_url", "") or ""
         preview = pending.preview_url or self._placeholder_url()
         lines = []
         if banner:
             lines += [f"![]({banner})", ""]
-        # markdown 会吞掉行首空白（全角空格也吞），前面加零宽空格保住 15pt 的缩进，
-        # 视觉上和进度条/按钮的 12dp 边距对齐
         indent = "\u200b\u3000"
         head = meta
         if pending.pages_total > 1 and "共" not in meta:
@@ -728,13 +743,24 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
     def _plain_text(self, pending: Pending) -> str:
         """卡片不可用时的文字版兜底。"""
         v = self._card_view(pending)
-        return f"{v['title']}\n{v['meta']}\n\n{v['content']}"
+        lines = [v["title"], v["desc"], "", v["file_detail"]]
+        if pending.state == "printing":
+            lines.append(f"打印进度 {v['progress']}%")
+        elif pending.state == "pending":
+            lines.append("回 1 打印 · 0 取消｜/p 改参数 · /status 看状态")
+        elif pending.state == "done":
+            lines.append("已出纸，记得去取")
+        elif pending.state == "failed":
+            lines.append(pending.error or "文件没打出来")
+        return "\n".join(lines)
 
     async def _say(self, pending: Pending, note: str = ""):
         """优先原地更新互动卡片；卡片不可用时退回文字消息。"""
+        if note:                      # 插话（如"上一批还在处理"）：单独回文字，不动卡片
+            if pending.data:
+                await self._reply(pending.data, note[:200])
+            return
         view = self._card_view(pending)
-        if note:
-            view["meta"] = note[:60]
         if pending.card_id and not self.card_disabled:
             ok = await asyncio.to_thread(self.card.update, pending.card_id, view)
             if ok:
@@ -749,8 +775,7 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
         if pending is None:
             await asyncio.to_thread(
                 self.card.update, out_track_id,
-                {"content": "这张卡片已经处理过了，无需重复操作。",
-                 "btnPrint": "已处理", "btnCancel": "关闭"})
+                {"file_detail": "这张卡片已经处理过了", "btnPrint": "已处理"})
             return
         if pending.state in ("done", "failed", "cancelled") and action_id != "print_again":
             LOG.info("卡片已处于 %s，忽略重复点击", pending.state)

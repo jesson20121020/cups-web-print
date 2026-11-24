@@ -59,6 +59,8 @@ DEFAULTS = {
     "card_target_staff_id": "",     # 空 = 发到群里
     # 卡片里 markdown 用的顶部横幅图（蓝底 + 打印机图标 + 书房打印机）
     "card_banner_url": "https://static.dingtalk.com/media/lALPM3L6nhX7sLXM8M0C7g_750_240.png",
+    # v8 原生卡片的顶部背景图（纯蓝渐变，无图标/文字；图标、标题由模板组件绘制）
+    "card_header_bg_url": "https://static.dingtalk.com/media/lALPD0_HseN7t23M8M0C7g_750_240.png",
     "preview_sheet": True,          # 卡片外再发一张「打印预览」长图
     "event_port": 8099,
     # 行为
