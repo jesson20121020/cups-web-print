@@ -1,5 +1,22 @@
 # cups-web-print 二次开发指南（含侧边栏预览）
 
+
+> ## ⚠️ 硬规则（2026-11-24 事故后新增，任何会话/任何 agent 都必须遵守）
+>
+> 1. **禁止**进入已安装应用的目录（`/var/apps/cups-web-print`、`/vol2/@appcenter/cups-web-print`，
+>    含其 `venv/`、工作目录）写文件，或手工/后台拉起服务（`python app.py`、`venv/bin/python3 app.py`、
+>    `nohup ... &`、`tmux`/`screen` 里跑）。**这类"野生进程"会让应用中心显示"未启用"却仍占着 5000 端口，
+>    用户点「启用」直接报端口被占用。**
+> 2. 与安装版交互只能走应用中心：`appcenter-cli start|stop|install-fpk`、`fnos-cli app start|stop|install-fpk`，
+>    或应用中心 Web UI。
+> 3. 改代码只能「改源码 → 自测 → 提交推送 → `fnos-build/scripts/build-fpk.sh` 打新版本 → 覆盖安装（卸载保留数据 + 安装）」，
+>    不要手工替换安装目录里的文件。
+> 4. 内核数据（钉钉配置/登录态、上传、预览、打印历史）只落 `<vol>/@appdata/cups-web-print`；
+>    往数据卷放文件用 `fnos-cli file upload`，不手写安装目录。
+> 5. 开发服务器请用 `./dev-server.sh`（默认 **5001**），不要用 5000 与安装版抢端口。
+
+---
+
 本指南说明如何配合 DeepSeek Harness（DSH）和 `dsh-web-preview-panel` 插件进行 cups-web-print 的二次开发。
 
 ---

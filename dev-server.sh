@@ -2,7 +2,7 @@
 # cups-web-print 开发服务器启动脚本
 #
 # 用法：
-#   ./dev-server.sh           # 启动（默认端口 5000）
+#   ./dev-server.sh           # 启动（默认端口 5001 —— 5000 留给应用中心装的那份）
 #   ./dev-server.sh 8080      # 自定义端口
 #   ./dev-server.sh stop      # 停止
 #   ./dev-server.sh status    # 查看状态
@@ -10,8 +10,9 @@
 #   ./dev-server.sh logs      # 查看日志
 #
 # 设计说明：
-#   - cups-web-print 在工作区目录运行，提供端口 5000 的 Flask 服务
-#   - dsh-web-preview-panel 通过 iframe 嵌入 localhost:5000
+#   - 开发服务器只用 5001（5000 是「应用中心安装版」的端口，抢了会让
+#     应用中心显示"未启用/端口被占用"，见 DEV_GUIDE.md 顶部硬规则）
+#   - dsh-web-preview-panel 通过 iframe 嵌入 localhost:5001
 #   - 修改代码后用 restart 即可（Flask 不会自动 reload）
 
 set -e
@@ -23,7 +24,7 @@ LOG_FILE="/tmp/cups-web-print-dev.log"
 PID_FILE="/tmp/cups-web-print-dev.pid"
 
 # 端口：第一个数字参数是端口；命令参数不算
-PORT=5000
+PORT=5001
 for arg in "$@"; do
     if [[ "$arg" =~ ^[0-9]+$ ]]; then
         PORT="$arg"
