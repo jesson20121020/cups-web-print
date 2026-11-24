@@ -14,7 +14,6 @@
 #   --printer NAME      队列名（默认自动挑第一台 IPP 队列，通常是 TS3380-IPPS）
 #   --copies N          份数（1-99，默认 1）
 #   --mono              黑白（默认彩色）
-#   --no-composite-black  彩色时不让黑色由彩墨合成（默认彩色下强制 ColorModel=RGB 彩墨黑）
 #   --simplex           单面（默认双面长边，与网页默认一致）
 #   --duplex-short      双面短边
 #   --paper SIZE        A4(默认)/A3/A5/A6/B4/B5/4x6/5x7/3.5x5/8x10
@@ -38,7 +37,6 @@ SERVICE="http://127.0.0.1:5000"
 PRINTER=""
 COPIES=1
 COLOR="color"
-COMPOSITE_BLACK=1   # 彩色默认：显式 ColorModel=RGB，黑色由 CMY 彩墨合成
 DUPLEX="two-sided-long-edge"
 PAPER="A4"
 PAGES=""
@@ -64,8 +62,6 @@ while [ $# -gt 0 ]; do
         --printer) PRINTER="${2:-}"; shift 2 ;;
         --copies) COPIES="${2:-1}"; shift 2 ;;
         --mono) COLOR="mono"; shift ;;
-        --no-composite-black) COMPOSITE_BLACK=0; shift ;;
-        --composite-black) COMPOSITE_BLACK=1; shift ;;
         --simplex) DUPLEX="one-sided"; shift ;;
         --duplex-short) DUPLEX="two-sided-short-edge"; shift ;;
         --paper) PAPER="${2:-A4}"; shift 2 ;;
@@ -174,16 +170,15 @@ if [ "$DRY_RUN" = 1 ]; then
     printf '文件：%s（%s）\n' "$FILE" "$(python3 -c "s=$size; print(('%.1f MB' % (s/1048576)) if s>=1048576 else ('%.0f KB' % (s/1024)))")"
     printf '上传：POST %s/api/upload  (multipart file=@%s)\n' "$SERVICE" "$FILE"
     printf '提交：POST %s/api/print  body=\n' "$SERVICE"
-    python3 - "$FILE" "$COPIES" "$COLOR" "$DUPLEX" "$PAPER" "$PAPER_TYPE" "$PAGES" "$ORIENTATION" "$SCALING" "$PRINTER" "$COMPOSITE_BLACK" <<'PY'
+    python3 - "$FILE" "$COPIES" "$COLOR" "$DUPLEX" "$PAPER" "$PAPER_TYPE" "$PAGES" "$ORIENTATION" "$SCALING" "$PRINTER" <<'PY'
 import json,sys,os
-f,copies,color,duplex,paper,ptype,pages,orient,scaling,printer,cblack=sys.argv[1:12]
+f,copies,color,duplex,paper,ptype,pages,orient,scaling,printer=sys.argv[1:11]
 body={
  "filename":"<服务端返回的文件名>",
  "printer":printer or "<自动选择>",
  "color_mode":color,"duplex":duplex,"orientation":orient,
  "paper_size":paper,"paper_type":ptype,"copies":int(copies),
  "page_range":pages or None,"mirror":False,"print_scaling":scaling,
- "composite_black":(color=="color" and cblack=="1"),
 }
 print(json.dumps(body,ensure_ascii=False,indent=2))
 print(f"# 原始文件：{os.path.basename(f)}")
@@ -240,14 +235,13 @@ if [ "$DO_PRINT" = 0 ]; then
 fi
 
 # ---------- 5. 提交打印 ----------
-body="$(python3 - "$remote_name" "$PRINTER" "$COPIES" "$COLOR" "$DUPLEX" "$PAPER" "$PAPER_TYPE" "$PAGES" "$ORIENTATION" "$SCALING" "$COMPOSITE_BLACK" <<'PY'
+body="$(python3 - "$remote_name" "$PRINTER" "$COPIES" "$COLOR" "$DUPLEX" "$PAPER" "$PAPER_TYPE" "$PAGES" "$ORIENTATION" "$SCALING" <<'PY'
 import json,sys
-name,printer,copies,color,duplex,paper,ptype,pages,orient,scaling,cblack=sys.argv[1:12]
+name,printer,copies,color,duplex,paper,ptype,pages,orient,scaling=sys.argv[1:11]
 print(json.dumps({
  "filename":name,"printer":printer,"color_mode":color,"duplex":duplex,
  "orientation":orient,"paper_size":paper,"paper_type":ptype,"copies":int(copies),
  "page_range":(pages or None),"mirror":False,"print_scaling":scaling,
- "composite_black":(color=="color" and cblack=="1"),
 },ensure_ascii=False))
 PY
 )"

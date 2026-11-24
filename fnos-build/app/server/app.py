@@ -12,7 +12,6 @@ import subprocess
 import json
 import uuid
 from datetime import datetime
-from functools import lru_cache
 import threading
 import time
 import logging
@@ -1524,33 +1523,7 @@ def get_printable_file(filepath, filename, page_range=None):
     return pdf_path, None, False
 
 
-@lru_cache(maxsize=32)
-def _supports_color_model_rgb(printer_name):
-    """检查队列 PPD 是否支持 ColorModel=RGB（不同品牌驱动的选项名/取值不一样）。
-
-    仅在彩色 + 彩墨合成黑时才会被调用；不支持就跳过该选项，避免向驱动传非法值
-    导致任务被拒（例如某些佳能私有驱动用 Color/Monochrome 而不是 RGB/Gray）。
-    """
-    try:
-        result = subprocess.run(
-            ['lpoptions', '-p', printer_name, '-l'],
-            capture_output=True, text=True, timeout=5,
-            env={**os.environ, 'LC_ALL': 'C'}
-        )
-        if result.returncode != 0:
-            return False
-        for line in (result.stdout or '').splitlines():
-            name, _, values = line.partition(':')
-            if name.split('/')[0].strip() == 'ColorModel':
-                choices = [v.strip(' *') for v in values.split()]
-                return 'RGB' in choices
-    except Exception as exc:
-        logger.warning(f"检查队列 ColorModel 支持失败（{printer_name}）：{exc}")
-    return False
-
-
-
-def submit_print_job(filepath, printer_name, color_mode='mono', duplex='one-sided', orientation='portrait', paper_size='A4', paper_type='plain', copies=1, page_range=None, mirror=False, print_scaling='fit', composite_black=True):
+def submit_print_job(filepath, printer_name, color_mode='mono', duplex='one-sided', orientation='portrait', paper_size='A4', paper_type='plain', copies=1, page_range=None, mirror=False, print_scaling='fit'):
     """
     提交打印任务到CUPS
 
@@ -1566,8 +1539,6 @@ def submit_print_job(filepath, printer_name, color_mode='mono', duplex='one-side
         page_range: 页面范围，格式如 "1-5 8 10-12"（空格分隔，不支持逗号）
         mirror: 是否镜像打印
         print_scaling: 打印缩放 (none, fill, fit, auto-fit, auto)
-        composite_black: 彩色模式下强制 ColorModel=RGB（sRGB 光栅，黑色由彩墨 CMY 合成），
-                         避免驱动走灰度/K 单色路径导致黑字发淡。黑白模式恒为 Gray（K 单色）
     """
     job_id = str(uuid.uuid4())
     filename = os.path.basename(filepath)
@@ -1641,26 +1612,11 @@ def submit_print_job(filepath, printer_name, color_mode='mono', duplex='one-side
         cmd.extend(['-o', f'media-type={cups_paper_type}'])
 
         # 添加色彩设置
-        # print-color-mode 是 IPP 标准属性；ColorModel 是驱动（PPD）层的光栅色彩空间：
-        #   ColorModel=RGB  → 生成 sRGB 光栅，黑色由彩墨（CMY）合成，黑字更实
-        #   ColorModel=Gray → 生成灰度光栅，走打印机 K 单色（黑墨）路径
-        # 很多 Canon/HP 机型在「灰度/K 单色」路径下黑字发灰发淡，所以彩色模式下
-        # 显式带上 ColorModel=RGB，确保任务不会落到灰度路径（即使驱动/PPD 默认是 Gray）。
         if color_mode == 'mono':
-            # 黑白保持原行为：只发标准属性，具体光栅色彩空间交给驱动
             cmd.extend(['-o', 'print-color-mode=monochrome'])
-            logger.info("色彩设置：黑白（print-color-mode=monochrome）")
         else:
             cmd.extend(['-o', 'print-color-mode=color'])
-            if composite_black:
-                if _supports_color_model_rgb(printer_name):
-                    cmd.extend(['-o', 'ColorModel=RGB'])
-                    logger.info("色彩设置：彩色 + 彩墨合成黑色（print-color-mode=color, ColorModel=RGB）")
-                else:
-                    logger.warning("色彩设置：该队列 PPD 不支持 ColorModel=RGB，跳过强制彩墨黑（仅 print-color-mode=color）")
-            else:
-                logger.info("色彩设置：彩色（未强制 ColorModel，交由驱动/打印机默认）")
-
+            
         # 添加双面打印设置
         if duplex == 'two-sided-long-edge':
             cmd.extend(['-o', 'sides=two-sided-long-edge'])
@@ -1691,7 +1647,7 @@ def submit_print_job(filepath, printer_name, color_mode='mono', duplex='one-side
         
         # 记录打印命令（用于调试）
         logger.info(f"执行打印命令: {' '.join(cmd)}")
-        logger.info(f"打印参数: color_mode={color_mode}, duplex={duplex}, orientation={orientation}, paper_size={paper_size}, paper_type={paper_type}, copies={copies}, page_range={page_range}, composite_black={composite_black}")
+        logger.info(f"打印参数: color_mode={color_mode}, duplex={duplex}, orientation={orientation}, paper_size={paper_size}, paper_type={paper_type}, copies={copies}, page_range={page_range}")
 
         # 执行打印命令（强制 LC_ALL=C，确保 "request id is ..." 解析稳定，避免非英文 locale 下提取不到 CUPS 任务 ID）
         result = subprocess.run(
@@ -1734,7 +1690,6 @@ def submit_print_job(filepath, printer_name, color_mode='mono', duplex='one-side
                 'copies': copies,
                 'page_range': page_range,
                 'print_scaling': print_scaling,
-                'composite_black': composite_black,
                 'mirror': mirror,
                 'actual_print_file': actual_print_file,
                 'status': 'submitted' if result.returncode == 0 else 'failed',
@@ -2737,10 +2692,6 @@ def api_print():
     
     mirror = data.get('mirror', False)
     print_scaling = data.get('print_scaling', 'fit')
-    # 彩色模式下「黑色也由彩墨合成」：默认开启（显式 ColorModel=RGB，避免驱动走灰度路径）
-    composite_black = data.get('composite_black', True)
-    if isinstance(composite_black, str):
-        composite_black = composite_black.strip().lower() not in ('', '0', 'false', 'no', 'off')
 
     # 记录解析后的参数
     logger.info(f"解析后的参数:")
@@ -2756,7 +2707,6 @@ def api_print():
     logger.info(f"  page_range: {page_range}")
     logger.info(f"  mirror: {mirror}")
     logger.info(f"  print_scaling: {print_scaling}")
-    logger.info(f"  composite_black: {bool(composite_black)}")
 
     # 基本参数验证
     if not filepath or not printer_name:
@@ -2803,9 +2753,6 @@ def api_print():
     if color_mode not in ['color', 'mono']:
         return jsonify({'error': '色彩模式无效，必须是 color 或 mono'}), 400
 
-    # 彩墨合成黑色只对彩色模式生效（黑白模式恒为 K 单色）
-    composite_black = bool(composite_black) and color_mode == 'color'
-
     # 验证双面设置
     if duplex not in ['one-sided', 'two-sided-long-edge', 'two-sided-short-edge']:
         return jsonify({'error': '双面设置无效'}), 400
@@ -2828,7 +2775,7 @@ def api_print():
     # 推荐 IPP 队列提示（不强制切换，仅提示）
     recommendation = _recommend_ipp_queue(printer_name)
 
-    job_id, success = submit_print_job(filepath, printer_name, color_mode, duplex, orientation, paper_size, paper_type, copies, page_range, mirror, print_scaling, composite_black)
+    job_id, success = submit_print_job(filepath, printer_name, color_mode, duplex, orientation, paper_size, paper_type, copies, page_range, mirror, print_scaling)
 
     if success:
         _sweep_terminal_jobs()   # 提交即清理：print_jobs 只在打印时增长，此处足以维持上限

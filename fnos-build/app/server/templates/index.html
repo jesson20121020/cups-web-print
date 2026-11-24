@@ -307,15 +307,6 @@
                                 </label>
                             </div>
                         </div>
-                        <div class="md:col-span-2">
-                            <label id="compositeBlackLabel" class="flex items-start gap-3 p-3 border border-gray-300 rounded-lg hover:bg-gray-50 cursor-pointer transition">
-                                <input type="checkbox" id="compositeBlack" checked class="mt-0.5 w-4 h-4 text-blue-600 rounded">
-                                <span class="flex-1">
-                                    <span class="block text-sm font-medium text-gray-700">黑色文字用彩墨合成（强制 RGB 光栅）</span>
-                                    <span id="compositeBlackHint" class="block text-xs text-gray-500 mt-0.5">彩色模式默认开启：任务显式带 <code class="font-mono">ColorModel=RGB</code>，黑色由 CMY 彩墨合成，避免驱动/PPD 走「灰度 / K 单色」路径把黑字打淡。黑白模式下该项不生效。</span>
-                                </span>
-                            </label>
-                        </div>
                         <div>
                             <label class="block text-sm font-medium text-gray-700 mb-2">双面打印</label>
                             <div class="space-y-1.5">
@@ -549,24 +540,6 @@
             return isValid;
         }
 
-
-        // 「黑色用彩墨合成」只在彩色模式下可用
-        function syncCompositeBlackState() {
-            const isColor = (document.querySelector('input[name="colorMode"]:checked') || {}).value === 'color';
-            const box = document.getElementById('compositeBlack');
-            const label = document.getElementById('compositeBlackLabel');
-            const hint = document.getElementById('compositeBlackHint');
-            if (box) box.disabled = !isColor;
-            if (label) {
-                label.classList.toggle('opacity-60', !isColor);
-                label.classList.toggle('cursor-not-allowed', !isColor);
-            }
-            if (hint) {
-                hint.innerHTML = isColor
-                    ? '彩色模式默认开启：任务显式带 <code class="font-mono">ColorModel=RGB</code>，黑色由 CMY 彩墨合成，避免驱动/PPD 走「灰度 / K 单色」路径把黑字打淡。'
-                    : '黑白模式只使用 K（黑墨），本项不生效。';
-            }
-        }
 
         document.addEventListener('DOMContentLoaded', () => {
             // 所有面板一律展开（不再折叠）
@@ -860,21 +833,6 @@
                 });
             });
 
-            // 「黑色用彩墨合成」只在彩色模式下可调；黑白模式下恒为 K 单色
-            document.querySelectorAll('input[name="colorMode"]').forEach(r => {
-                r.addEventListener('change', () => {
-                    syncCompositeBlackState();
-                    window.__printPreview && window.__printPreview.applyPrintEffects();
-                });
-            });
-            syncCompositeBlackState();
-            const compositeBlackBox = document.getElementById('compositeBlack');
-            if (compositeBlackBox) {
-                compositeBlackBox.addEventListener('change', () => {
-                    window.__printPreview && window.__printPreview.applyPrintEffects();
-                });
-            }
-
             // 添加错误处理的定时器
             jobsTimerId = setInterval(() => {
                 try {
@@ -1127,7 +1085,6 @@
             const pageRange = document.getElementById('pageRange');
             const mirrorPrint = document.getElementById('mirrorPrint');
             const printScaling = document.getElementById('printScaling');
-            const compositeBlack = document.getElementById('compositeBlack');
 
             if (!colorMode) {
                 console.error('未选择色彩模式');
@@ -1161,8 +1118,7 @@
                         copies: parseInt(copies.value) || 1,
                         page_range: pageRange ? pageRange.value.trim() : null,
                         mirror: mirrorPrint ? mirrorPrint.checked : false,
-                        print_scaling: printScaling ? printScaling.value : 'fit',
-                        composite_black: compositeBlack ? compositeBlack.checked : true
+                        print_scaling: printScaling ? printScaling.value : 'fit'
                     })
                 });
 
@@ -1246,12 +1202,6 @@
                         <span class="text-gray-600">色彩模式:</span>
                         <span class="text-gray-800">${getColorModeText(job.color_mode)}</span>
                     </div>
-                    ${job.color_mode === 'color' ? `
-                    <div class="flex justify-between">
-                        <span class="text-gray-600">黑色合成:</span>
-                        <span class="text-gray-800">${job.composite_black === false ? '驱动默认' : '彩墨（ColorModel=RGB）'}</span>
-                    </div>
-                    ` : ''}
                     <div class="flex justify-between">
                         <span class="text-gray-600">双面打印:</span>
                         <span class="text-gray-800">${getDuplexText(job.duplex)}</span>

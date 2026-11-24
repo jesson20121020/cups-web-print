@@ -53,9 +53,7 @@ $PRINT /path/to/file.pdf --no-print --json
 $PRINT /path/to/file.pdf --dry-run
 ```
 
-参数覆盖：`--printer` `--copies` `--mono` `--simplex` `--duplex-short` `--paper` `--paper-type` `--pages` `--scaling` `--orientation` `--no-print` `--dry-run` `--wait` `--json` `--service` `--force` `--no-composite-black`。
-
-彩色模式下服务端默认给任务带 `-o ColorModel=RGB`（黑色文字由彩墨合成，避免落到「灰度 / K 单色」光栅路径把黑字打淡）。确实想用打印机默认行为时才加 `--no-composite-black`；黑白模式（`--mono`）恒走 K 黑墨，该选项无效。
+参数覆盖：`--printer` `--copies` `--mono` `--simplex` `--duplex-short` `--paper` `--paper-type` `--pages` `--scaling` `--orientation` `--no-print` `--dry-run` `--wait` `--json` `--service` `--force`。
 
 ## 默认值（与网页一致，别自己乱改）
 

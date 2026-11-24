@@ -333,13 +333,6 @@
       const orient = ((document.querySelector('input[name="orientation"]:checked') || {}).value);
       if (orient === 'landscape') badges.push(`<span class="px-2 py-0.5 bg-orange-600/80 text-white text-xs rounded shadow">横向</span>`);
       if (colorMode === 'mono') badges.push(`<span class="px-2 py-0.5 bg-gray-700/80 text-white text-xs rounded shadow">黑白</span>`);
-      if (colorMode === 'color') {
-        // 彩色模式默认「黑色用彩墨合成」（显式 ColorModel=RGB）
-        const compositeEl = document.getElementById('compositeBlack');
-        if (compositeEl && compositeEl.checked) {
-          badges.push(`<span class="px-2 py-0.5 bg-teal-600/80 text-white text-xs rounded shadow">彩墨黑</span>`);
-        }
-      }
 
       const mirrorEl = document.getElementById('mirrorPrint');
       if (mirrorEl && mirrorEl.checked) badges.push(`<span class="px-2 py-0.5 bg-pink-600/80 text-white text-xs rounded shadow">镜像</span>`);
