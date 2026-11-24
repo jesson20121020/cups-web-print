@@ -144,29 +144,42 @@ def count_pages(attachments) -> int:
 
 
 def collect_pages(attachments, max_pages: int = 2):
-    """收集预览用的前几页图，同时统计总页数。
+    """收集预览单元，返回 (cells, total_pages)，cells 是 [(PIL 图, 角标文字)]。
 
-    返回值：(imgs, total_pages)
-      - 图片文件：一张算 1 页
-      - PDF：用 pdfinfo 取总页数，并渲染前 max_pages 页
+    规则（2026-11-25 按反馈改：以前 2 个文件只显示第一个文件的前两页，看不出第二个）：
+      - 只有 1 个文件：PDF 取前 max_pages 页
+      - 有多个文件：**每个文件各取第 1 页**（最多 max_pages 个），角标写文件名
     """
-    imgs, total = [], 0
-    for att in attachments:
-        ext = os.path.splitext(getattr(att, "path", ""))[1].lower()
+    cells, total = [], 0
+    files = [a for a in attachments if getattr(a, "path", "")]
+    multi = len(files) > 1
+    for att in files:
+        path = att.path
+        ext = os.path.splitext(path)[1].lower()
+        raw_name = getattr(att, "name", "") or os.path.basename(path)
+        name = _short(os.path.basename(raw_name), 18).replace("\u2026", "...") if multi else ""
         if ext == ".pdf":
-            n = pdf_page_count(att.path) or 1
-            total += n
-            if len(imgs) < max_pages:
-                imgs.extend(_pdf_page_images(att.path, max_pages - len(imgs)))
+            pages = pdf_page_count(path) or 1
+            total += pages
+            if len(cells) >= max_pages:
+                continue
+            if multi:
+                im = _page_image(path, 1200, 1200)          # 第 1 页
+                if im is not None:
+                    cells.append((im, f"{name}（共 {pages} 页）" if pages > 1 else name))
+            else:
+                for im in _pdf_page_images(path, max_pages):
+                    cells.append((im, ""))
         elif ext in IMAGE_EXT:
             total += 1
-            if len(imgs) < max_pages:
-                im = _page_image(att.path, 1200, 1200)
-                if im is not None:
-                    imgs.append(im)
+            if len(cells) >= max_pages:
+                continue
+            im = _page_image(path, 1200, 1200)
+            if im is not None:
+                cells.append((im, name))
         else:
             total += 1
-    return imgs, total
+    return cells, total
 
 
 def _page_image(path: str, max_w: int, max_h: int) -> Image.Image | None:
@@ -281,43 +294,47 @@ def _short(s: str, n: int) -> str:
 
 
 def build_card_preview(attachments, out_path: str, size=(720, 420), max_pages: int = 2) -> bool:
-    """卡片内用的预览图：固定比例（默认 720x420 ≈ 1.71:1），最多并排两页。
+    """卡片内用的预览图：固定比例（默认 720x420 ≈ 1.71:1）。
 
-    卡片里的 Image 组件高度是固定的（dp），所以图必须是固定比例，
-    否则 centerCrop 会把内容裁掉。
+    单个 PDF 并排前 2 页；多个文件则每个文件各取第 1 页并标上文件名，
+    这样"卡片写 2 个文件、预览只看到一个"的问题就没了。
     """
     if not attachments:
         return False
     W2, H2 = size
-    pages, total_pages = collect_pages(attachments, max_pages)
-    if not pages:
+    cells, total_pages = collect_pages(attachments, max_pages)
+    if not cells:
         return False
 
     canvas = Image.new("RGB", (W2, H2), (255, 255, 255))
     draw = ImageDraw.Draw(canvas)
-    n = len(pages)
-    # 左右各 24px（≈12dp @2x）白边：卡片 markdown 没有 padding，
-    # 靠图片自带边距让预览图和原生进度条/按钮左右对齐
-    pad = 24
-    gap = 12
+    n = len(cells)
+    pad, gap = 24, 12
+    has_label = any(lbl for _, lbl in cells)
+    label_h = 24 if has_label else 0
     cell_w = (W2 - pad * 2 - gap * (n - 1)) // n
-    cell_h = H2 - pad * 2 - 26
-    for idx, im in enumerate(pages):
+    cell_h = H2 - pad * 2 - 26 - label_h
+    for idx, (im, label) in enumerate(cells):
         x = pad + idx * (cell_w + gap)
         draw.rounded_rectangle([x, pad, x + cell_w, pad + cell_h], radius=10,
                                fill=(255, 255, 255), outline=(226, 229, 233), width=2)
         thumb = _fit(im, cell_w - 12, cell_h - 12)
         canvas.paste(thumb, (x + (cell_w - thumb.width) // 2,
                             pad + (cell_h - thumb.height) // 2 + 2))
-    total = len(attachments)
-    if total_pages > 1:
-        note = f"共 {total_pages} 页" + (f"，预览前 {len(pages)} 页" if len(pages) < total_pages else "")
-    elif total > 1:
-        note = f"共 {total} 个文件"
+        if label:
+            _draw_text(draw, (x + 2, pad + cell_h + 4), label, 14, (120, 126, 133))
+
+    total_files = len([a for a in attachments if getattr(a, "path", "")]) or len(attachments)
+    if total_files > 1:
+        note = f"{total_files} 个文件，共 {total_pages} 页，每份取第 1 页"
+    elif total_pages > 1:
+        note = f"共 {total_pages} 页" + (f"，预览前 {len(cells)} 页" if len(cells) < total_pages else "")
     else:
         note = "第 1 页"
 
     _draw_text(draw, (pad + 2, H2 - 22), note, 16, (140, 146, 153))
     canvas.save(out_path, "PNG", optimize=True)
-    LOG.info("卡片预览图已生成 %s (%dx%d)", os.path.basename(out_path), W2, H2)
+    LOG.info("卡片预览图已生成 %s (%dx%d, %d 格)", os.path.basename(out_path), W2, H2, n)
     return True
+
+
