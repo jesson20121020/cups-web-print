@@ -11,6 +11,17 @@ APP_DIR="${TRIM_APPDEST:-/var/apps/${APP_NAME}}"
 . "$(cd "$(dirname "$0")" && pwd)/_datadir"
 
 LOG="${DATA_DIR}/install.log"
+
+# 数据目录属主兜底：如果之前有别的用户（比如 root）在数据目录里留下文件
+# （典型是 app.pid），包用户会写不进去 -> 应用中心一直显示"未运行"。
+# 这里以 root 跑时顺手把属主修正到数据目录本身的属主；非 root 时跳过。
+if [ "$(id -u)" = "0" ] && [ -d "${DATA_DIR}" ]; then
+    owner="$(stat -c '%u:%g' "${DATA_DIR}" 2>/dev/null)"
+    if [ -n "${owner}" ]; then
+        chown -R "${owner}" "${DATA_DIR}" 2>/dev/null || true
+    fi
+fi
+
 mkdir -p "${DATA_DIR}" 2>/dev/null || true
 exec >> "${LOG}" 2>&1
 echo "=========================================="

@@ -120,25 +120,40 @@ def restore_pending_archive(log=None) -> bool:
     用途：fnOS 覆盖安装走的是「卸载(保留数据) + 重新安装」，而老版本的用户文件
     （uploads/previews）原本在**安装目录**里，卸载时会被一起删掉。升级前把它们
     打成 restore-pending.tar.gz 放进数据目录，首次启动自动解回来。
-    解压后改名为 *.done 避免重复执行。
+    可能有多份（重复上传会变成 restore-pending_1.tar.gz），按修改时间**从新到旧**
+    全部应用，解压完改名 *.done，避免重复执行。
     """
     import glob as _glob
     import tarfile
 
-    for path in sorted(_glob.glob(os.path.join(APP_DATA_DIR, "restore-pending*.tar.gz"))):
+    paths = [p for p in _glob.glob(os.path.join(APP_DATA_DIR, "restore-pending*.tar.gz"))
+             if not p.endswith(".done")]
+    if not paths:
+        return False
+    paths.sort(key=lambda p: os.path.getmtime(p), reverse=True)   # 新的先解，旧的只补缺
+    applied = 0
+    for path in paths:
         try:
             with tarfile.open(path, "r:gz") as tf:
                 members = [m for m in tf.getmembers()
                            if not (m.name.startswith("/") or ".." in m.name.split("/"))]
+                # 保留已存在的文件（新的恢复包优先），只补缺失的
+                skip = set()
+                for m in members:
+                    target = os.path.join(APP_DATA_DIR, m.name)
+                    if os.path.exists(target) and not m.isdir():
+                        skip.add(m.name)
+                todo = [m for m in members if m.name not in skip]
                 try:
-                    tf.extractall(APP_DATA_DIR, members=members, filter="data")   # py>=3.12
+                    tf.extractall(APP_DATA_DIR, members=todo, filter="data")   # py>=3.12
                 except TypeError:
-                    tf.extractall(APP_DATA_DIR, members=members)
+                    tf.extractall(APP_DATA_DIR, members=todo)
             os.replace(path, path + ".done")
+            applied += 1
             if log:
-                log.info("已从 %s 恢复 %d 项历史数据", os.path.basename(path), len(members))
-            return True
+                log.info("已从 %s 恢复 %d 项（跳过已存在 %d 项）",
+                         os.path.basename(path), len(todo), len(skip))
         except Exception as exc:
             if log:
                 log.warning("恢复数据包失败 %s: %s", path, exc)
-    return False
+    return applied > 0
