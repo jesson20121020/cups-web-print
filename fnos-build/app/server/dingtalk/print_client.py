@@ -100,6 +100,24 @@ class PrintClient:
         LOG.info("打印已提交 job=%s %s", data.get("job_id"), server_name)
         return data
 
+    def cancel(self, job_id: str) -> bool:
+        """取消一个还在队列里/正在打的 job（Web 侧会调 CUPS cancel）。"""
+        if not job_id:
+            return False
+        try:
+            r = self._session.delete(f"{self.base}/api/jobs/{job_id}", timeout=self.timeout)
+            data = {}
+            try:
+                data = r.json() or {}
+            except Exception:
+                pass
+            ok = r.status_code == 200 and data.get("success", True)
+            LOG.info("取消打印 job=%s -> %s %s", job_id, r.status_code, data.get("message") or "")
+            return bool(ok)
+        except Exception as exc:
+            LOG.warning("取消打印失败 job=%s: %s", job_id, exc)
+            return False
+
     def job(self, job_id: str) -> dict:
         r = self._session.get(f"{self.base}/api/jobs", timeout=self.timeout)
         r.raise_for_status()

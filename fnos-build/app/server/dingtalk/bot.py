@@ -104,6 +104,8 @@ class Pending:
         self.curr_file = ""
         self.elapsed = 0
         self.error = ""
+        self.server_job_id = ""   # 当前打印任务在 Web 服务里的 job id（用于取消）
+        self.cancel_requested = False  # 用户在卡片上点了取消
 
     @property
     def key(self) -> str:
@@ -181,9 +183,9 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
             pct = max(0, min(100, int(pending.progress or 0)))
             if pages > 1:
                 done = max(1, min(pages, round(pct / 100 * pages)))
-                btn = f"打印中({done}/{pages})"
+                btn = f"打印中({done}/{pages}) · 取消"
             else:
-                btn = f"打印中 {pct}%"
+                btn = f"打印中 {pct}% · 取消"
         elif pending.state == "done":
             pct = 100
             btn = "已打印"
@@ -676,6 +678,9 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
             results = []
             for job in self._plan_jobs(pending):
                 name, path = job["name"], job["path"]
+                if pending.cancel_requested:
+                    LOG.info("用户取消，跳过剩余任务：%s", name)
+                    break
                 try:
                     server_name = await asyncio.to_thread(self.pc.upload, path)
                     resp = await asyncio.to_thread(
@@ -685,6 +690,7 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
                         copies=pending.copies, page_range=pending.page_range,
                         scaling=self.cfg.default_scaling,
                     )
+                    pending.server_job_id = str(resp.get("job_id") or "")
                     job_info = await self._wait_job(pending, resp["job_id"], name)
                     results.append((name, resp.get("job_id"), job_info))
                 except PrintError as exc:
@@ -694,8 +700,16 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
                     results.append((name, None, {"status": "failed", "message": str(exc)}))
 
             elapsed = int(time.time() - started)
-            ok = all((i.get("status") or "").lower() == "completed" for _, _, i in results)
-            pending.state = "done" if ok else "failed"
+            statuses = [(i.get("status") or "").lower() for _, _, i in results]
+            ok = bool(statuses) and all(s == "completed" for s in statuses)
+            cancelled = pending.cancel_requested or any("cancel" in s for s in statuses)
+            if ok:
+                pending.state = "done"
+            elif cancelled:
+                pending.state = "cancelled"
+                pending.error = "已取消打印"
+            else:
+                pending.state = "failed"
             pending.elapsed = elapsed
             await self._say(pending)
             LOG.info("打印结果 %s：%s", printer, "; ".join(
@@ -713,6 +727,9 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
         last_pct = -1
         last_ts = 0.0
         while time.time() < deadline:
+            if pending.cancel_requested:
+                LOG.info("用户取消，停止等待 job=%s", job_id)
+                return {"status": "cancelled", "message": "用户取消打印"}
             try:
                 last = await asyncio.to_thread(self.pc.job, job_id) or last
             except Exception as exc:
@@ -794,10 +811,20 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
             await self._say(pending)
             return
 
-        # confirm（默认按确认处理）
+        # 打印中再点按钮 = 取消打印（一个按钮兼做打印/取消）
         if pending.state == "printing":
-            await self._say(pending)
+            if pending.cancel_requested:
+                await self._say(pending)
+                return
+            pending.cancel_requested = True
+            LOG.info("卡片点击取消打印 job=%s", pending.server_job_id)
+            # 不用立刻刷卡片：_wait_job 会马上返回 cancelled，_do_print 收尾时把卡片
+            # 一次性刷成「已取消」，避免闪一下又变回"打印中"
+            if pending.server_job_id:
+                await asyncio.to_thread(self.pc.cancel, pending.server_job_id)
             return
+
+        # confirm（默认按确认处理）
         await self._do_print(None, pending)
 
     def _plan_jobs(self, pending: Pending) -> list:
