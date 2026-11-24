@@ -4,7 +4,9 @@
 
 # --- 关键路径 ---
 APP_DIR="${TRIM_APPDEST}"
-APP_DATA_DIR="${TRIM_PKGVAR}"
+# 统一数据目录解析（见 cmd/_datadir；变量缺失时不再退回到应用安装目录里另建空目录）
+. "$(cd "$(dirname "$0")" && pwd)/_datadir"
+APP_DATA_DIR="${DATA_DIR}"
 # 实测 fnOS 把 app.tgz 内容直接落到 ${TRIM_APPDEST}/ 根（不是 target/server/）
 APP_SERVER_DIR="${APP_DIR}/server"
 VENV_DIR="${APP_DATA_DIR}/venv"

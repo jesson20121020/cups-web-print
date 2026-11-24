@@ -1,3 +1,10 @@
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    from paths import UPLOADS_DIR as _UPLOADS_DIR, PREVIEWS_DIR as _PREVIEWS_DIR
+except ImportError:
+    _UPLOADS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
+    _PREVIEWS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'previews')
 """
 打印预览相关路由 (Ported from cups-web, hanxi/cups-web)
 ========================================================
@@ -64,8 +71,9 @@ def _safe_remove(path):
         real = os.path.realpath(path)
         # 仅允许删除 uvicorn 信任目录下的文件
         for base in ('uploads', 'previews', '/tmp'):
-            base_real = os.path.realpath(os.path.join(os.path.dirname(__file__), base)) \
-                if base != '/tmp' else '/tmp'
+            base_real = {'uploads': os.path.realpath(_UPLOADS_DIR),
+                         'previews': os.path.realpath(_PREVIEWS_DIR),
+                         '/tmp': '/tmp'}[base]
             if real.startswith(base_real + os.sep):
                 if os.path.exists(real):
                     os.remove(real)
@@ -81,7 +89,7 @@ def _store_temp_file(content_bytes, original_name):
     safe_name = os.path.basename(original_name or 'preview')
     # 文件命名：<token>__<safe_name>
     token = uuid.uuid4().hex
-    preview_dir = os.path.join(os.path.dirname(__file__), 'previews')
+    preview_dir = _PREVIEWS_DIR
     os.makedirs(preview_dir, exist_ok=True)
     path = os.path.join(preview_dir, f"_tmp_{token}__{safe_name}")
     with open(path, 'wb') as f:
@@ -180,7 +188,7 @@ def api_preview_by_name():
         return jsonify({'error': '非法文件名'}), 400
 
     script_dir = os.path.dirname(__file__)
-    previews_dir = os.path.join(script_dir, 'previews')
+    previews_dir = _PREVIEWS_DIR
     uploads_dir = os.path.join(script_dir, 'uploads')
 
     lower = filename.lower()

@@ -39,7 +39,8 @@ fi
 # ---------- 3. LibreOffice 安装（依据向导 wizard_install_libreoffice）----------
 # 向导字段名来自 fnos-build/wizard/install：wizard_install_libreoffice (true/false)
 # 安装成功后写一个 sentinel 文件到 ${TRIM_PKGVAR}/.libreoffice_installed 供后续排查。
-DATA_DIR="${TRIM_PKGVAR:-/vol1/@appdata/${APP_NAME}}"
+# 统一数据目录解析（见 cmd/_datadir；变量缺失时不再退回到应用安装目录里另建空目录）
+. "$(cd "$(dirname "$0")" && pwd)/_datadir"
 mkdir -p "${DATA_DIR}" 2>/dev/null || true
 SENTINEL="${DATA_DIR}/.libreoffice_installed"
 

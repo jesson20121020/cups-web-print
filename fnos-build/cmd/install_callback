@@ -7,13 +7,8 @@ set -uo pipefail
 APP_NAME="${TRIM_APPNAME:-cups-web-print}"
 APP_DIR="${TRIM_APPDEST:-/var/apps/${APP_NAME}}"
 
-# 数据目录：优先 TRIM_PKGVAR
-DATA_DIR=""
-if [ -n "${TRIM_PKGVAR:-}" ]; then
-    DATA_DIR="${TRIM_PKGVAR}"
-else
-    DATA_DIR="${APP_DIR}/var"
-fi
+# 统一数据目录解析（见 cmd/_datadir；变量缺失时不再退回到应用安装目录里另建空目录）
+. "$(cd "$(dirname "$0")" && pwd)/_datadir"
 
 LOG="${DATA_DIR}/install.log"
 mkdir -p "${DATA_DIR}" 2>/dev/null || true

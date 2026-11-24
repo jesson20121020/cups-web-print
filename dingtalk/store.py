@@ -10,10 +10,26 @@ import threading
 
 LOG = logging.getLogger("dingtalk.store")
 
-# 数据目录优先级：显式环境变量 > fnOS 应用数据目录(TRIM_PKGVAR) > 代码目录旁
+# 数据目录优先级：DINGTALK_DATA_DIR(完整路径) > DATA_DIR/TRIM_PKGVAR(应用数据根) > 代码目录旁
+#
+# 坑（2026-11-24 踩过）：新版启动路径只导出 DATA_DIR、不带 TRIM_PKGVAR，
+# 以前只认 TRIM_PKGVAR → 退回到「代码目录旁/dingtalk-data」这个空目录，
+# 表现就是钉钉页显示「未配置/未登录、服务已停止」，而真实配置和 dws 登录态
+# 还好好躺在 <应用数据根>/dingtalk-data 里。
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_DATA_DIR = os.environ.get("DINGTALK_DATA_DIR") or os.path.join(
-    os.environ.get("TRIM_PKGVAR") or APP_DIR, "dingtalk-data")
+
+
+def _default_data_dir() -> str:
+    explicit = os.environ.get("DINGTALK_DATA_DIR")
+    if explicit:
+        return explicit
+    app_data_root = os.environ.get("DATA_DIR") or os.environ.get("TRIM_PKGVAR")
+    if app_data_root:
+        return os.path.join(app_data_root, "dingtalk-data")
+    return os.path.join(APP_DIR, "dingtalk-data")
+
+
+DEFAULT_DATA_DIR = _default_data_dir()
 
 DEFAULTS = {
     # 钉钉应用

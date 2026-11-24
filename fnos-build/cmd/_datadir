@@ -1,0 +1,47 @@
+#!/bin/bash
+# _datadir — 统一解析「应用数据目录」（install/upgrade/uninstall/service-setup/main 都 source 它）
+#
+# 背景（2026-11-24 真实事故）：
+#   fnOS 不同路径拉起应用时带的变量不一样：正常调度会带 TRIM_PKGVAR，
+#   但某些启动/安装路径只有 DATA_DIR（甚至什么都没有）。各生命周期脚本以前
+#   各写一套 `DATA_DIR="${TRIM_PKGVAR:-${APP_DIR}/var}"`，变量缺失时就会
+#   在「应用安装目录里」另建一个空数据目录 —— 表现就是：钉钉配置/登录态、
+#   上传文件、打印记录全部看起来"丢了"，其实旧数据还躺在原来的卷上。
+#
+# 解析顺序：
+#   1) 显式 DATA_DIR（main 导出，或调用方指定）
+#   2) TRIM_PKGVAR（fnOS 注入的应用数据根）
+#   3) 由 ${APP_DIR}/home 软链推导出的卷：<vol>/@appdata/<appname>
+#   4) 兜底 ${APP_DIR}/var
+resolve_app_data_dir() {
+    local app_name="${TRIM_APPNAME:-cups-web-print}"
+    local app_dir="${TRIM_APPDEST:-/var/apps/${app_name}}"
+
+    if [ -n "${DATA_DIR:-}" ]; then
+        printf '%s' "${DATA_DIR}"
+        return 0
+    fi
+    if [ -n "${TRIM_PKGVAR:-}" ]; then
+        printf '%s' "${TRIM_PKGVAR}"
+        return 0
+    fi
+
+    local app_home="" app_vol=""
+    if [ -L "${app_dir}/home" ]; then
+        app_home="$(readlink -f "${app_dir}/home" 2>/dev/null)"
+        app_vol="$(printf '%s' "${app_home}" | sed -n 's#^\(/vol[^/]*\)/.*#\1#p')"
+    fi
+    if [ -z "${app_vol}" ]; then
+        app_vol="$(printf '%s' "${app_dir}" | sed -n 's#^\(/vol[^/]*\)/.*#\1#p')"
+    fi
+
+    if [ -n "${app_vol}" ]; then
+        printf '%s' "${app_vol}/@appdata/${app_name}"
+    else
+        printf '%s' "${app_dir}/var"
+    fi
+}
+
+# 同时导出一份，方便脚本里直接用 ${DATA_DIR}
+DATA_DIR="$(resolve_app_data_dir)"
+export DATA_DIR

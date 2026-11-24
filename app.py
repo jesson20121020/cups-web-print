@@ -20,6 +20,7 @@ import shutil
 import glob
 import tempfile
 import socket
+import atexit
 from urllib.parse import urlparse
 
 # 应用版本号：从根目录 version 文件读取（纯数字，如 1.8），显示时加 v 前缀
@@ -157,14 +158,26 @@ except ImportError:
 
 app = Flask(__name__)
 
-app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(__file__), 'uploads')
-app.config['PREVIEW_FOLDER'] = os.path.join(os.path.dirname(__file__), 'previews')
+# 数据目录：放在应用数据卷里（<vol>/@appdata/<app>），覆盖安装/升级不会丢
+# 老版本把 uploads/previews 写在代码目录旁，启动时一次性迁移过来
+try:
+    from paths import APP_DATA_DIR, UPLOADS_DIR, PREVIEWS_DIR, JOBS_FILE, ensure_dirs, migrate_legacy_dirs
+except ImportError:                     # 兜底：极端情况下退回旧行为，保证能起来
+    APP_DATA_DIR = os.path.dirname(os.path.abspath(__file__))
+    UPLOADS_DIR = os.path.join(APP_DATA_DIR, 'uploads')
+    PREVIEWS_DIR = os.path.join(APP_DATA_DIR, 'previews')
+    JOBS_FILE = os.path.join(APP_DATA_DIR, 'jobs.json')
+    ensure_dirs = lambda: [os.makedirs(d, exist_ok=True) for d in (UPLOADS_DIR, PREVIEWS_DIR)]
+    migrate_legacy_dirs = lambda log=None: []
+
+app.config['UPLOAD_FOLDER'] = UPLOADS_DIR
+app.config['PREVIEW_FOLDER'] = PREVIEWS_DIR
+app.config['APP_DATA_DIR'] = APP_DATA_DIR
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB 最大文件
 app.config['ALLOWED_EXTENSIONS'] = {'pdf', 'txt', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'rtf', 'jpg', 'jpeg', 'png', 'gif', 'bmp', 'svg'}
 
-# 确保上传目录和预览目录存在
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-os.makedirs(app.config['PREVIEW_FOLDER'], exist_ok=True)
+# 确保上传目录和预览目录存在（数据目录 + 老数据迁移）
+ensure_dirs()
 
 # 导入日志轮换处理器
 from logging.handlers import RotatingFileHandler
@@ -175,7 +188,7 @@ logger.setLevel(logging.INFO)
 
 # 创建轮换处理器：单文件最大 1MB，保留 5 个备份文件
 rotating_handler = RotatingFileHandler(
-    filename=os.path.join(os.path.dirname(__file__), 'app.log'),
+    filename=os.path.join(APP_DATA_DIR, 'app.log'),
     maxBytes=1*1024*1024,     # 1MB
     backupCount=5,            # 保留 5 个备份
     encoding='utf-8'
@@ -196,6 +209,9 @@ console_handler.setFormatter(formatter)
 # 添加处理器
 logger.addHandler(rotating_handler)
 logger.addHandler(console_handler)
+
+# 老版本遗留的 uploads/previews 迁到数据目录（覆盖安装后不再丢）
+migrate_legacy_dirs(logger)
 
 # 注册打印预览蓝图（移植自 hanxi/cups-web）
 try:
@@ -220,6 +236,78 @@ def _sanitize_job(job):
     j = dict(job)
     j.pop('actual_print_file', None)
     return j
+
+
+# ---------- 打印任务历史持久化（覆盖安装/重启后仍能看到历史）----------
+JOBS_PERSIST_INTERVAL = 5.0
+
+
+def _load_jobs():
+    """启动时把上次的任务列表读回来；半路被打断的任务标成 unknown。"""
+    try:
+        with open(JOBS_FILE, encoding='utf-8') as fh:
+            items = json.load(fh)
+    except FileNotFoundError:
+        return 0
+    except Exception as exc:
+        logger.warning("读取打印历史失败：%s", exc)
+        return 0
+    restored = 0
+    with print_jobs_lock:
+        for job in items:
+            if not isinstance(job, dict):
+                continue
+            jid = job.get('id')
+            if not jid or jid in print_jobs:
+                continue
+            if job.get('status') not in JOB_TERMINAL_STATES:
+                job['status'] = 'unknown'
+                job['error'] = job.get('error') or '服务重启，本次任务状态未知'
+            print_jobs[jid] = job
+            restored += 1
+    if restored:
+        logger.info("已恢复 %d 条打印历史", restored)
+    return restored
+
+
+def _jobs_signature():
+    with print_jobs_lock:
+        return tuple(sorted(
+            (jid, str(j.get('status')), str(j.get('progress')), str(j.get('timestamp')))
+            for jid, j in print_jobs.items()))
+
+
+def _persist_jobs():
+    try:
+        with print_jobs_lock:
+            payload = [_sanitize_job(j) for j in print_jobs.values()]
+        tmp = JOBS_FILE + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as fh:
+            json.dump(payload, fh, ensure_ascii=False, default=str)
+        os.replace(tmp, JOBS_FILE)
+        return True
+    except Exception as exc:
+        logger.warning("保存打印历史失败：%s", exc)
+        return False
+
+
+def _jobs_persist_loop():
+    last = None
+    while True:
+        try:
+            time.sleep(JOBS_PERSIST_INTERVAL)
+            sig = _jobs_signature()
+            if sig != last:
+                if _persist_jobs():
+                    last = sig
+        except Exception:
+            pass
+
+
+# 启动时恢复历史 + 后台定期落盘
+_load_jobs()
+threading.Thread(target=_jobs_persist_loop, name='jobs-persist', daemon=True).start()
+atexit.register(_persist_jobs)
 
 
 def _sweep_terminal_jobs():

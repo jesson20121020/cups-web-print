@@ -9,25 +9,8 @@ set -uo pipefail
 APP_NAME="${TRIM_APPNAME:-cups-web-print}"
 APP_DIR="${TRIM_APPDEST:-/var/apps/${APP_NAME}}"
 
-# 数据目录：优先 TRIM_PKGVAR（fnOS 注入）；兜底推导 fnOS home 软链
-DATA_DIR=""
-if [ -n "${TRIM_PKGVAR:-}" ]; then
-    DATA_DIR="${TRIM_PKGVAR}"
-else
-    if [ -L "${APP_DIR}/home" ]; then
-        APP_HOME="$(readlink -f "${APP_DIR}/home")"
-        APP_VOL="$(printf '%s' "${APP_HOME}" | sed -n 's#^\(/vol[^/]*\)/.*#\1#p')"
-    fi
-    if [ -z "${APP_VOL:-}" ]; then
-        APP_VOL="$(printf '%s' "${APP_DIR}" | sed -n 's#^\(/vol[^/]*\)/.*#\1#p')"
-    fi
-    if [ -n "${APP_VOL:-}" ]; then
-        DATA_DIR="${APP_VOL}/@appdata/${APP_NAME}"
-    else
-        DATA_DIR="${APP_DIR}/var"
-    fi
-fi
-export DATA_DIR
+# 数据目录：统一解析（见 cmd/_datadir；优先 DATA_DIR > TRIM_PKGVAR > home 软链推导的卷）
+. "$(cd "$(dirname "$0")" && pwd)/_datadir"
 
 # 监听端口（service_port 模式）
 APP_PORT="${TRIM_SERVICE_PORT:-5000}"
