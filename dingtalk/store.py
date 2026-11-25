@@ -65,6 +65,9 @@ DEFAULTS = {
     "event_port": 8099,
     # 行为
     "batch_window": 8,
+    # 卡片发出后，这段时间内继续发来的文件仍并入同一张卡片（原地更新）；
+    # 超过它、或者已经点了打印，就开一张新卡片
+    "batch_merge_seconds": 120,
     "pending_ttl": 30,
     "job_timeout": 300,
 }

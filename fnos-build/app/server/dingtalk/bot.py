@@ -130,6 +130,7 @@ class Pending:
         self.error = ""
         self.sender_nick = ""     # 发消息的人（卡片上「触发用户」）
         self.print_started = 0.0  # 本次打印开始的时间戳（卡片上显示「打印时长」）
+        self.card_at = 0.0        # 这张卡片发出的时间（合并窗口从这里算）
         self.server_job_id = ""   # 当前打印任务在 Web 服务里的 job id（用于取消）
         self.cancel_requested = False  # 用户在卡片上点了取消
 
@@ -311,6 +312,7 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
                 robot_code=self.cfg.robot_code,
             )
             pending.card_id = tid
+            pending.card_at = time.time()
             self.by_card[tid] = pending
             return True
         except Exception as exc:
@@ -521,9 +523,11 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
         pending = self.pending.get(key)
         if pending is not None:
             expired = (time.time() - pending.created) > self.cfg.pending_ttl * 60
-            # 只有「已经在打印/已结束/超时」才算封口；卡片已发出仍可继续并入，
-            # 这种时候原地更新那张卡片（不新开一张），所以多张图分开慢慢发也能攒成一批
-            sealed = pending.state != "pending" or pending.busy
+            # 封口条件：正在打印 / 已结束 / 超过 ttl，或者「卡片发出后已超过合并窗口」
+            # —— 窗口内继续发来的文件并入同一张卡片（原地更新，不新开卡）
+            merge_window = float(getattr(self.cfg, "batch_merge_seconds", 120) or 120)
+            window_over = bool(pending.card_at) and (time.time() - pending.card_at) > merge_window
+            sealed = pending.state != "pending" or pending.busy or window_over
             if expired or sealed:
                 self._drop_pending(pending)
                 pending = None
