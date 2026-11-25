@@ -523,11 +523,9 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
         pending = self.pending.get(key)
         if pending is not None:
             expired = (time.time() - pending.created) > self.cfg.pending_ttl * 60
-            # 封口条件：正在打印 / 已结束 / 超过 ttl，或者「卡片发出后已超过合并窗口」
-            # —— 窗口内继续发来的文件并入同一张卡片（原地更新，不新开卡）
-            merge_window = float(getattr(self.cfg, "batch_merge_seconds", 120) or 120)
-            window_over = bool(pending.card_at) and (time.time() - pending.card_at) > merge_window
-            sealed = pending.state != "pending" or pending.busy or window_over
+            # 封口：这一批已经出过卡片 / 正在打印 / 已结束 / 超过 ttl -> 新文件另起一批
+            # （出卡片前会反复确认没有新文件，所以不会出现"卡片在图片前面"）
+            sealed = bool(pending.card_id) or pending.state != "pending" or pending.busy
             if expired or sealed:
                 self._drop_pending(pending)
                 pending = None
@@ -576,43 +574,52 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
         return out
 
     async def _flush_later(self, pending: Pending, data):
-        # 防抖而不是死等：最后一个附件到达后静默 1.5s 就出卡片；
-        # 最多等 batch_window 秒（连发多张图仍会合并成一批）
-        window = float(self.cfg.batch_window or 8)
-        quiet = min(1.5, window)
-        deadline = time.time() + window
-        last_n, last_change = len(pending.attachments), time.time()
-        while time.time() < deadline:
-            await asyncio.sleep(0.3)
+        """攒批 + 发卡片。规则（用户口径）：
+
+        1. 只发了一个文件：处理完（页数/预览都准备好），**真正发送前**再检查一次，
+           期间没有新文件 -> 立刻发卡片；
+        2. 处理期间又收到新文件 -> 不发，继续合并、重新处理，
+           发送前再检查……直到某一轮「检查后没有新文件」才发。
+        所以不会出现"卡片先发出去、后面还跟着刚发的图"的情况。
+        """
+        quiet = min(1.5, float(self.cfg.batch_window or 8))
+        deadline = time.time() + 300          # 兜底：一直在发也不能无限攒着不发
+        while True:
             n = len(pending.attachments)
-            if n != last_n:
-                last_n, last_change = n, time.time()
-            elif time.time() - last_change >= quiet:
-                break
+            stable = time.time()
+            while time.time() - stable < quiet:          # 等这一波文件收齐
+                await asyncio.sleep(0.2)
+                if len(pending.attachments) != n:
+                    n, stable = len(pending.attachments), time.time()
+
+            # 处理（统计页数 + 生成预览图）；这期间用户可能又发来文件
+            try:
+                pending.pages_total = await asyncio.to_thread(count_pages, pending.attachments)
+            except Exception as exc:
+                LOG.warning("统计页数失败：%s", exc)
+            pending.preview_url = ""
+            pending._prev_done = False
+            await self._prepare_preview(pending)
+
+            if len(pending.attachments) != n:
+                if time.time() < deadline:
+                    LOG.info("发送前又收到新文件（%d -> %d），继续合并", n, len(pending.attachments))
+                    continue
+                LOG.info("攒批超时（%d 个文件），先发卡片", len(pending.attachments))
+            break                                        # 发送前检查通过
+
         if not pending.attachments:
             return
         try:
-            pending.pages_total = await asyncio.to_thread(count_pages, pending.attachments)
-        except Exception as exc:
-            LOG.warning("统计页数失败：%s", exc)
-        if pending.card_id:
-            # 这一批已经有卡片了：原地更新（文件数/预览/页数都会刷新），不新开一张
-            LOG.info("并入已有卡片 %s（当前 %d 个文件）", pending.card_id, len(pending.attachments))
-            await self._say(pending)
-            task = asyncio.create_task(self._refresh_preview(pending))
-            self._bg.add(task)
-            task.add_done_callback(self._bg.discard)
-        elif await self._send_card(pending):
-            LOG.info("已发出互动卡片（单按钮）")
-            task = asyncio.create_task(self._refresh_preview(pending))
-            self._bg.add(task)
-            task.add_done_callback(self._bg.discard)
-            task2 = asyncio.create_task(self._send_preview(pending))
-            self._bg.add(task2)
-            task2.add_done_callback(self._bg.discard)
-        else:
-            await self._reply(data, self._card(pending))
-        self._gc()
+            if await self._send_card(pending):
+                LOG.info("已发出互动卡片（单按钮，%d 个文件）", len(pending.attachments))
+                task = asyncio.create_task(self._send_preview(pending))
+                self._bg.add(task)
+                task.add_done_callback(self._bg.discard)
+            else:
+                await self._reply(data, self._card(pending))
+        finally:
+            self._gc()
 
     # ------------------------------------------------------------------ 文本
     async def _on_text(self, data, text, conv_id, conv_type, staff_id):
