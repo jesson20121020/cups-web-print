@@ -423,12 +423,7 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
             return
 
         key = f"{conv_id}:{staff_id}"
-        pending = self.pending.get(key)
-        if pending and (time.time() - pending.created) > self.cfg.pending_ttl * 60:
-            pending = None
-        if pending is None:
-            pending = Pending(conv_id, conv_type, staff_id)
-            self.pending[key] = pending
+        pending = self._batch_for(key, conv_id, conv_type, staff_id)
         pending.data = data
 
         saved = []
@@ -450,6 +445,30 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
         if pending.timer and not pending.timer.done():
             pending.timer.cancel()
         pending.timer = asyncio.create_task(self._flush_later(pending, data))
+
+    def _batch_for(self, key: str, conv_id: str, conv_type: str, staff_id: str) -> Pending:
+        """取「当前正在攒的批次」；已出过卡片的批次视为已封口，新文件另起一批。
+
+        规则（2026-11-25 用户要求）：一张卡片只对应「上一张卡片之后到达的文件」。
+        以前是同一个 pending 一直往里塞，于是第二张卡片会把上一张卡片的文件也带上。
+        """
+        pending = self.pending.get(key)
+        if pending is not None:
+            expired = (time.time() - pending.created) > self.cfg.pending_ttl * 60
+            sealed = bool(pending.card_id) or pending.state != "pending" or pending.busy
+            if expired or sealed:
+                self._drop_pending(pending)
+                pending = None
+        if pending is None:
+            pending = Pending(conv_id, conv_type, staff_id)
+            self.pending[key] = pending
+            LOG.info("新批次开始 key=%s", key)
+        return pending
+
+    def _drop_pending(self, pending: Pending) -> None:
+        """只弃掉这个批次自己；别把同一会话里新开的批次一起删了。"""
+        if self.pending.get(pending.key) is pending:
+            self.pending.pop(pending.key, None)
 
     def _dest_path(self, conv_id: str, name: str) -> str:
         safe = re.sub(r"[^\w\u4e00-\u9fff.\-]+", "_", name or "file")[:80]
@@ -505,7 +524,7 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
         except Exception as exc:
             LOG.warning("统计页数失败：%s", exc)
         if await self._send_card(pending):
-            LOG.info("已发出互动卡片（含确认/取消按钮）")
+            LOG.info("已发出互动卡片（单按钮）")
             task = asyncio.create_task(self._refresh_preview(pending))
             self._bg.add(task)
             task.add_done_callback(self._bg.discard)
@@ -521,7 +540,7 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
         key = f"{conv_id}:{staff_id}"
         pending = self.pending.get(key)
         if pending and (time.time() - pending.created) > self.cfg.pending_ttl * 60:
-            self.pending.pop(key, None)
+            self._drop_pending(pending)
             pending = None
 
         low = text.lower().strip()
@@ -549,7 +568,7 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
             return
 
         if text in ("0", "取消", "cancel"):
-            self.pending.pop(key, None)
+            self._drop_pending(pending)
             await self._reply(data, "已取消，文件不会打印。")
             return
 
@@ -657,7 +676,7 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
             await self._say(pending, "上一批还在处理，稍等。")
             return
         if not pending.attachments:
-            self.pending.pop(pending.key, None)
+            self._drop_pending(pending)
             await self._say(pending, "待打印队列是空的。")
             return
         pending.busy = True
@@ -714,7 +733,7 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
             await self._say(pending)
             LOG.info("打印结果 %s：%s", printer, "; ".join(
                 f"{n}={i.get('status')}" for n, _, i in results))
-            self.pending.pop(key, None)
+            self._drop_pending(pending)
             self.by_card.pop(pending.card_id, None)
             self._cleanup_files(pending)
         finally:
@@ -803,7 +822,7 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
             LOG.warning("卡片点击者 %s 不在白名单（仅记录）", user_id)
 
         if action_id == "cancel":
-            self.pending.pop(pending.key, None)
+            self._drop_pending(pending)
             self.by_card.pop(out_track_id, None)
             pending.state = "cancelled"
             pending.error = "这些文件不会打印"
@@ -939,7 +958,14 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
 
     def _gc(self):
         now = time.time()
+        ttl = self.cfg.pending_ttl * 60
         for key, p in list(self.pending.items()):
-            if now - p.created > self.cfg.pending_ttl * 60:
+            if now - p.created > ttl:
                 self.pending.pop(key, None)
                 self._cleanup_files(p)
+        # 出过卡片但一直没点的老批次（已不在 self.pending 里）也要回收，别让文件一直躺着
+        for tid, p in list(self.by_card.items()):
+            if p.state == "pending" and not p.busy and (now - p.created) > ttl:
+                self.by_card.pop(tid, None)
+                self._cleanup_files(p)
+                LOG.info("回收超时未打印的卡片批次 %s", tid)
