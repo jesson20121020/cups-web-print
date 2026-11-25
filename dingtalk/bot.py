@@ -373,8 +373,14 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
                 return
             mid = await asyncio.to_thread(self.media.upload_image, path)
             # 钉钉静态资源地址必须带 _宽_高.扩展名，否则 404
+            try:
+                from PIL import Image as _Image
+                with _Image.open(path) as _im:
+                    _w, _h = _im.size
+            except Exception:
+                _w, _h = 1200, 480
             pending.preview_url = (f"https://static.dingtalk.com/media/"
-                                   f"{mid.lstrip('@')}_720_420.png")
+                                   f"{mid.lstrip('@')}_{_w}_{_h}.png")
             LOG.info("卡片预览图就绪 %s", pending.preview_url)
         except Exception as exc:
             LOG.warning("卡片预览图生成失败：%s", exc)
@@ -482,6 +488,9 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
         nick = (data.get("senderNick") or "").strip()
         if nick and not pending.sender_nick:
             pending.sender_nick = nick
+        # 这一批的文件变了 -> 预览图要重建
+        pending.preview_url = ""
+        pending._prev_done = False
 
         saved = []
         for item in items:
@@ -512,7 +521,9 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
         pending = self.pending.get(key)
         if pending is not None:
             expired = (time.time() - pending.created) > self.cfg.pending_ttl * 60
-            sealed = bool(pending.card_id) or pending.state != "pending" or pending.busy
+            # 只有「已经在打印/已结束/超时」才算封口；卡片已发出仍可继续并入，
+            # 这种时候原地更新那张卡片（不新开一张），所以多张图分开慢慢发也能攒成一批
+            sealed = pending.state != "pending" or pending.busy
             if expired or sealed:
                 self._drop_pending(pending)
                 pending = None
@@ -580,7 +591,14 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
             pending.pages_total = await asyncio.to_thread(count_pages, pending.attachments)
         except Exception as exc:
             LOG.warning("统计页数失败：%s", exc)
-        if await self._send_card(pending):
+        if pending.card_id:
+            # 这一批已经有卡片了：原地更新（文件数/预览/页数都会刷新），不新开一张
+            LOG.info("并入已有卡片 %s（当前 %d 个文件）", pending.card_id, len(pending.attachments))
+            await self._say(pending)
+            task = asyncio.create_task(self._refresh_preview(pending))
+            self._bg.add(task)
+            task.add_done_callback(self._bg.discard)
+        elif await self._send_card(pending):
             LOG.info("已发出互动卡片（单按钮）")
             task = asyncio.create_task(self._refresh_preview(pending))
             self._bg.add(task)
