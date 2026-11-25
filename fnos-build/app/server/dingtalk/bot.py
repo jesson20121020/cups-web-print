@@ -36,6 +36,30 @@ TITLE = "书房打印机"
 CARD_DESC = "点一下就能打，TS3380"
 CARD_ICON = "https://static.dingtalk.com/media/lALPD0tXvHnK3dXMwMzA_192_192.png"
 
+# v10 卡片（状态卡）用的标题与状态图标（96x96 透明底，自己画的，已传到钉钉 CDN）
+CARD_TITLE_V10 = "家庭打印机"
+STATUS_ICON = {
+    "pending":  "https://static.dingtalk.com/media/lALPD2dDdIGD2R1gYA_96_96.png",   # 灰色打印机
+    "printing": "https://static.dingtalk.com/media/lALPM3tCpnNtWB1gYA_96_96.png",   # 蓝色打印机
+    "ok":       "https://static.dingtalk.com/media/lALPD0zNidNOlx1gYA_96_96.png",   # 绿色对勾
+    "fail":     "https://static.dingtalk.com/media/lALPM25lXrCyCB1gYA_96_96.png",   # 红色叉
+    "cancel":   "https://static.dingtalk.com/media/lALPM3pVRackCB1gYA_96_96.png",   # 灰色横杠
+}
+
+
+def _metric_html(label: str, value: str, color: str) -> str:
+    """v10 卡片里的「已打印 3 / 6」「整体进度 30%」这类双行富文本。"""
+    return ("<font colorTokenV2=common_gray1_color "
+            "sizeToken=common_footnote_text_style__font_size>" + label + "</font>"
+            "<br><font sizeToken=common_h2_text_style__font_size colorTokenV2=" + color + ">"
+            "**" + value + "**</font>")
+
+
+def _duration_text(seconds: int) -> str:
+    seconds = max(0, int(seconds or 0))
+    m, s = divmod(seconds, 60)
+    return f"{m}min {s}s" if m else f"{s}s"
+
 
 def _bar_html(pct: int, width: int = 20) -> str:
     """卡片里没有真正的进度条组件，用方块字符画一条（文本一定会被渲染）。"""
@@ -104,6 +128,8 @@ class Pending:
         self.curr_file = ""
         self.elapsed = 0
         self.error = ""
+        self.sender_nick = ""     # 发消息的人（卡片上「触发用户」）
+        self.print_started = 0.0  # 本次打印开始的时间戳（卡片上显示「打印时长」）
         self.server_job_id = ""   # 当前打印任务在 Web 服务里的 job id（用于取消）
         self.cancel_requested = False  # 用户在卡片上点了取消
 
@@ -154,7 +180,7 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
             LOG.warning("互动卡片不可用，退回文字卡片：%s", exc)
 
     def _file_detail(self, pending: Pending) -> str:
-        """卡片里「文件」那行的文案：几个文件、共几页。"""
+        """v8 模板用的「文件」行文案（保留做回滚兼容）。"""
         n = len(pending.attachments)
         pages = pending.pages_total or 0
         if pages > 1:
@@ -162,63 +188,91 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
         return f"{n} 个文件" if n > 1 else "1 个文件"
 
     def _card_view(self, pending: Pending) -> dict:
-        """把当前状态渲染成 v8 卡片参数（模板变量与字段一一对应）。
+        """把当前状态渲染成 v10 卡片参数（状态卡）。
 
-        模板变量（卡片平台 v8 模板 c7f55dd4…）：
-          title       顶部标题（静态文案）
-          desc        顶部副标题（静态文案；打印机离线时换成错误原因）
-          icon        顶部图标 URL（静态）
-          background  顶部背景图 URL
-          file_detail 「文件」那行：N 个文件 · 共 M 页
-          preview_img 打印预览图（前 2 页拼图）
-          progress    进度条 0-100
-          btnPrint    唯一的按钮文案（随状态变：打印 / 打印中(2/16) / 已打印）
+        模板变量（卡片平台 38f3762b…）：
+          title          标题
+          status_text    状态文案：待确认打印 / 打印中 / 打印成功 / 打印失败 / 已取消
+          status_img     状态图标 URL（成功=绿勾、失败=红叉、取消=灰横杠、打印中=蓝、待打印=灰）
+          preview_img    顶部横幅：打印预览拼图（多页并排）
+          metric1        富文本「已打印 3 / 6」
+          metric2        富文本「整体进度 30%」
+          who_trigger    触发用户（发消息的人）
+          time_trigger   触发时间（收到文件的时间）
+          status_time    状态时间（卡片更新时间，MM-DD HH:MM）
+          print_duration 打印时长
+          files_count    文件数量
+          btn_title      按钮文案（一个按钮兼做 打印/取消）
+          redirectUrl    按钮跳转（回调模式下不用，留空）
         """
         self._apply_params(pending, {})
-        pages = pending.pages_total or 0
+        pages = max(0, int(pending.pages_total or 0))
         pct = 0
+        done_pages = 0
+        icon = STATUS_ICON["pending"]
+        color1, color2 = "common_gray1_color", "common_gray1_color"
+
         if pending.state == "pending":
-            btn = "打印机离线" if pending.error else "打印"
+            status = "打印机离线" if pending.error else "待确认打印"
+            btn = "打印机离线" if pending.error else "开始打印"
         elif pending.state == "printing":
             pct = max(0, min(100, int(pending.progress or 0)))
-            if pages > 1:
-                done = max(1, min(pages, round(pct / 100 * pages)))
-                btn = f"打印中({done}/{pages}) · 取消"
-            else:
-                btn = f"打印中 {pct}% · 取消"
+            if pages > 0:
+                done_pages = max(0, min(pages, round(pct / 100 * pages)))
+            status = f"打印中 {done_pages}/{pages}" if pages else f"打印中 {pct}%"
+            icon = STATUS_ICON["printing"]
+            btn = f"取消打印({done_pages}/{pages})" if pages else "取消打印"
+            color1, color2 = "common_blue1_color", "common_orange1_color"
         elif pending.state == "done":
-            pct = 100
+            pct, done_pages = 100, pages
+            status = "打印成功"
+            icon = STATUS_ICON["ok"]
             btn = "已打印"
+            color1 = color2 = "common_green1_color"
         elif pending.state == "failed":
+            status = "打印失败"
+            icon = STATUS_ICON["fail"]
             btn = "打印失败"
+            color1 = color2 = "common_red1_color"
         else:
+            status = "已取消"
+            icon = STATUS_ICON["cancel"]
             btn = "已取消"
 
-        desc = CARD_DESC
-        if pending.state == "pending" and pending.error:
-            desc = pending.error[:40]
+        if pending.state == "done":
+            duration = _duration_text(pending.elapsed)
+        elif pending.state == "printing":
+            started = pending.print_started or pending.created
+            duration = _duration_text(time.time() - started)
+        else:
+            duration = ""
 
         preview = pending.preview_url or self._placeholder_url()
-        # 同时带上 v7 模板需要的字段：这样新旧模板都能渲染，切换/回滚期间不会出废卡
-        meta = f"正在打印 · {pct}%" if pending.state == "printing" else (
-            "待确认打印" if pending.state == "pending" else btn)
-        legacy = {
-            "md": self._card_md(pending, meta, self._params_line(pending)),
-            "meta": meta,
-            "content": "",
-            "preview": preview,
-            "btnCancel": "取消",
-        }
+        metric1 = _metric_html("已打印", f"{done_pages} / {pages or 1}", color1)
+        metric2 = _metric_html("整体进度", f"{pct}%", color2)
+
         return {
-            "title": TITLE,
-            "desc": desc,
+            # ---- v10（当前模板）----
+            "title": CARD_TITLE_V10,
+            "status_text": status,
+            "status_img": icon,
+            "preview_img": preview,
+            "metric1": metric1,
+            "metric2": metric2,
+            "who_trigger": getattr(pending, "sender_nick", "") or "家庭成员",
+            "time_trigger": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(pending.created)),
+            "status_time": time.strftime("%m-%d %H:%M"),
+            "print_duration": duration,
+            "files_count": str(len(pending.attachments)),
+            "btn_title": btn,
+            "redirectUrl": "",
+            # ---- v8/v9（旧模板，留着便于回滚）----
+            "desc": CARD_DESC,
             "icon": CARD_ICON,
             "background": getattr(self.cfg, "card_header_bg_url", "") or "",
             "file_detail": self._file_detail(pending),
-            "preview_img": preview,
             "progress": pct,
             "btnPrint": btn,
-            **legacy,
         }
 
     def _card_md(self, pending: Pending, meta: str, params: str) -> str:
@@ -425,6 +479,9 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
         key = f"{conv_id}:{staff_id}"
         pending = self._batch_for(key, conv_id, conv_type, staff_id)
         pending.data = data
+        nick = (data.get("senderNick") or "").strip()
+        if nick and not pending.sender_nick:
+            pending.sender_nick = nick
 
         saved = []
         for item in items:
@@ -681,6 +738,7 @@ class PrintBotHandler(dingtalk_stream.ChatbotHandler):
             return
         pending.busy = True
         pending.state = "printing"
+        pending.print_started = time.time()
         key = pending.key
         self._apply_params(pending, {})
         started = time.time()

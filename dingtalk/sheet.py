@@ -157,7 +157,9 @@ def collect_pages(attachments, max_pages: int = 2):
         path = att.path
         ext = os.path.splitext(path)[1].lower()
         raw_name = getattr(att, "name", "") or os.path.basename(path)
-        name = _short(os.path.basename(raw_name), 18).replace("\u2026", "...") if multi else ""
+        # 多格并排时格子很窄，名字截短些，避免糊到相邻格子上
+        limit = 18 if len(files) <= 2 else 11
+        name = _short(os.path.basename(raw_name), limit).replace("\u2026", "...") if multi else ""
         if ext == ".pdf":
             pages = pdf_page_count(path) or 1
             total += pages
@@ -166,7 +168,9 @@ def collect_pages(attachments, max_pages: int = 2):
             if multi:
                 im = _page_image(path, 1200, 1200)          # 第 1 页
                 if im is not None:
-                    cells.append((im, f"{name}（共 {pages} 页）" if pages > 1 else name))
+                    # 只有 1~2 格时才带页数；格子多了页数放底部说明里
+                    suffix = f"（共 {pages} 页）" if (pages > 1 and len(files) <= 2) else ""
+                    cells.append((im, name + suffix))
             else:
                 for im in _pdf_page_images(path, max_pages):
                     cells.append((im, ""))
@@ -293,11 +297,10 @@ def _short(s: str, n: int) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
-def build_card_preview(attachments, out_path: str, size=(720, 420), max_pages: int = 2) -> bool:
-    """卡片内用的预览图：固定比例（默认 720x420 ≈ 1.71:1）。
+def build_card_preview(attachments, out_path: str, size=(1200, 480), max_pages: int = 5) -> bool:
+    """卡片顶部横幅用的预览图：1200x480 ≈ 2.5:1（贴合模板里 100dp 高的横幅）。
 
-    单个 PDF 并排前 2 页；多个文件则每个文件各取第 1 页并标上文件名，
-    这样"卡片写 2 个文件、预览只看到一个"的问题就没了。
+    单个 PDF 并排前 5 页；多个文件则每个文件各取第 1 页（最多 5 格）并标上文件名。
     """
     if not attachments:
         return False
